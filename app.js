@@ -78,7 +78,7 @@ const defaultState = () => ({
   panelBot: "",
   // type: none | preset | custom · transform pans/zooms the background
   bg: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
-  logo: { dataUrl: null, zoom: 1 }, // always tinted white
+  logo: { dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 }, // always tinted white
   kind: "protocol", // "protocol" | "compile"
   compile: defaultCompile(),
 });
@@ -354,8 +354,10 @@ function hexPath(ctx, box, pointy) {
 
 // Draw the logo white-tinted, cover-filling the hexagon (so it hides the frame's
 // hexagon) and clipped to the hexagon shape. `zoom` scales beyond the cover fit.
-function drawLogoHex(ctx, img, box, pointy, zoom) {
-  const z = Math.max(0.3, Math.min(4, zoom || 1));
+function drawLogoHex(ctx, img, box, pointy, logo) {
+  const lg = logo || {};
+  const z = Math.max(0.3, Math.min(4, lg.zoom || 1));
+  const ox = lg.offsetX || 0, oy = lg.offsetY || 0;
   const s = Math.max(box.w / img.width, box.h / img.height) * z;
   const w = img.width * s, h = img.height * s;
   const off = document.createElement("canvas");
@@ -369,7 +371,7 @@ function drawLogoHex(ctx, img, box, pointy, zoom) {
   ctx.save();
   hexPath(ctx, box, pointy);
   ctx.clip();
-  ctx.drawImage(off, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
+  ctx.drawImage(off, box.x + (box.w - w) / 2 + ox, box.y + (box.h - h) / 2 + oy, w, h);
   ctx.restore();
 }
 
@@ -446,7 +448,7 @@ async function renderCard(st, cnv) {
   if (st.logo.dataUrl) {
     try {
       const img = await getImageFromDataUrl(st.logo.dataUrl);
-      drawLogoHex(ctx, img, ZONES.hex, ZONES.hex.pointy, st.logo.zoom);
+      drawLogoHex(ctx, img, ZONES.hex, ZONES.hex.pointy, st.logo);
     } catch (e) { /* ignore */ }
   }
 }
@@ -493,7 +495,7 @@ async function renderCompileLandscape(st, side, cnv) {
     try {
       const img = await getImageFromDataUrl(st.logo.dataUrl);
       const hb = side === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex;
-      drawLogoHex(ctx, img, hb, hb.pointy, st.logo.zoom);
+      drawLogoHex(ctx, img, hb, hb.pointy, st.logo);
     } catch (e) {}
   }
 }
@@ -687,19 +689,39 @@ function layoutOverlay() {
       e.style.paddingTop = e.style.paddingBottom = "0px";
     }
   }
+  // Clickable logo hotspot over the hexagon (per kind/side).
+  const lh = el("logoHotspot");
+  if (lh) {
+    const hz = state.kind === "compile"
+      ? (compileSide === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex)
+      : ZONES.hex;
+    lh.style.display = "flex";
+    lh.style.left = hz.x * scale + "px";
+    lh.style.top = hz.y * scale + "px";
+    lh.style.width = hz.w * scale + "px";
+    lh.style.height = hz.h * scale + "px";
+    lh.style.fontSize = hz.w * scale * 0.3 + "px";
+    lh.classList.toggle("has-logo", !!state.logo.dataUrl);
+  }
 }
 
 if (cardOverlay && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(() => layoutOverlay()).observe(canvas);
 }
-// While Ctrl/⌘ is held, let pointer events fall through the text fields to the
-// canvas so background pan/zoom works even over a text zone.
+// While Shift is held, let pointer events fall through the text fields and the
+// logo hotspot to the canvas so pan/zoom works over any zone.
 function syncOverlayPanning(e) {
-  if (cardOverlay) cardOverlay.classList.toggle("panning", !!(e.ctrlKey || e.metaKey));
+  const on = !!e.shiftKey;
+  if (cardOverlay) cardOverlay.classList.toggle("panning", on);
+  // grab cursor only while Shift is held and there's something to move
+  canvas.classList.toggle("shift-grab", on && (state.bg.type !== "none" || !!state.logo.dataUrl));
 }
 window.addEventListener("keydown", syncOverlayPanning);
 window.addEventListener("keyup", syncOverlayPanning);
-window.addEventListener("blur", () => cardOverlay && cardOverlay.classList.remove("panning"));
+window.addEventListener("blur", () => {
+  if (cardOverlay) cardOverlay.classList.remove("panning");
+  canvas.classList.remove("shift-grab");
+});
 
 /* ---------------- IndexedDB key-value store ----------------
    localStorage caps at ~5MB, which a few cards with custom images blow past.
@@ -861,7 +883,6 @@ function bgTransform() {
 function syncBgAdjust() {
   const on = state.bg.type !== "none";
   el("bgAdjust").hidden = !on;
-  canvas.classList.toggle("draggable", on);
   const pct = Math.round(clampScale(bgTransform().scale) * 100);
   el("inBgZoom").value = pct;
   el("bgZoomVal").textContent = pct + "%";
@@ -893,16 +914,38 @@ function zoomAt(cx, cy, factor) {
   t.scale = newScale;
 }
 
-// Background pan/zoom requires holding Ctrl (or ⌘), so normal scrolling/clicking
-// over the card is unaffected.
-const panZoomKey = (e) => e.ctrlKey || e.metaKey;
+// Pan/zoom requires holding Shift (Ctrl+scroll is hijacked by the browser),
+// so normal scrolling/clicking over the card is unaffected.
+const panZoomKey = (e) => e.shiftKey;
 
-// Hold Ctrl + drag to pan
-let dragging = false, lastPX = 0, lastPY = 0;
+// The hexagon zone for the current kind/side — used to route drag/zoom to the
+// logo when the cursor is over it.
+function activeHexZone() {
+  return state.kind === "compile"
+    ? (compileSide === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex)
+    : ZONES.hex;
+}
+function cardPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  const f = canvasScaleFactor();
+  return { x: (e.clientX - r.left) * f, y: (e.clientY - r.top) * f };
+}
+function overLogo(e) {
+  if (!state.logo.dataUrl) return false;
+  const h = activeHexZone(), p = cardPoint(e);
+  return p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h;
+}
+function clampLogoZoom(z) { return Math.max(0.5, Math.min(3, z)); }
+
+// Hold Shift + drag to pan the background (or the logo, if the cursor is on it)
+let dragging = false, dragTarget = null, lastPX = 0, lastPY = 0;
 canvas.addEventListener("pointerdown", (e) => {
-  if (state.bg.type === "none" || !panZoomKey(e)) return;
+  if (!panZoomKey(e)) return;
+  const onLogo = overLogo(e);
+  if (!onLogo && state.bg.type === "none") return; // nothing to drag
   e.preventDefault();
   dragging = true;
+  dragTarget = onLogo ? "logo" : "bg";
   lastPX = e.clientX; lastPY = e.clientY;
   canvas.setPointerCapture(e.pointerId);
   canvas.classList.add("grabbing");
@@ -910,31 +953,42 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   const f = canvasScaleFactor();
-  const t = bgTransform();
-  t.offsetX += (e.clientX - lastPX) * f;
-  t.offsetY += (e.clientY - lastPY) * f;
+  const dx = (e.clientX - lastPX) * f, dy = (e.clientY - lastPY) * f;
+  if (dragTarget === "logo") {
+    state.logo.offsetX = (state.logo.offsetX || 0) + dx;
+    state.logo.offsetY = (state.logo.offsetY || 0) + dy;
+  } else {
+    const t = bgTransform();
+    t.offsetX += dx; t.offsetY += dy;
+  }
   lastPX = e.clientX; lastPY = e.clientY;
   scheduleRender(false);
 });
 function endDrag() {
   if (!dragging) return;
   dragging = false;
+  dragTarget = null;
   canvas.classList.remove("grabbing");
   saveCurrent();
 }
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
 
-// Hold Ctrl + scroll to zoom (anchored at cursor); plain scroll scrolls the page
+// Hold Shift + scroll to zoom (the logo if hovered, else the background)
 canvas.addEventListener("wheel", (e) => {
-  if (state.bg.type === "none" || !panZoomKey(e)) return;
+  if (!panZoomKey(e)) return;
+  const onLogo = overLogo(e);
+  if (!onLogo && state.bg.type === "none") return;
   e.preventDefault();
-  const r = canvas.getBoundingClientRect();
-  const f = canvasScaleFactor();
-  const cx = (e.clientX - r.left) * f;
-  const cy = (e.clientY - r.top) * f;
-  zoomAt(cx, cy, e.deltaY < 0 ? 1.1 : 1 / 1.1);
-  syncBgAdjust();
+  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  if (onLogo) {
+    state.logo.zoom = clampLogoZoom((state.logo.zoom || 1) * factor);
+    refreshLogoUI();
+  } else {
+    const p = cardPoint(e);
+    zoomAt(p.x, p.y, factor);
+    syncBgAdjust();
+  }
   scheduleRender(false);
   debouncedSave();
 }, { passive: false });
@@ -964,6 +1018,8 @@ el("inLogoZoom").addEventListener("input", () => {
 });
 el("btnLogoReset").addEventListener("click", () => {
   state.logo.zoom = 1;
+  state.logo.offsetX = 0;
+  state.logo.offsetY = 0;
   refreshLogoUI();
   scheduleRender();
 });
@@ -1021,6 +1077,8 @@ el("btnClearLogo").addEventListener("click", () => {
   refreshLogoUI();
   scheduleRender();
 });
+// Click the logo hexagon on the card to upload/replace the logo.
+el("logoHotspot").addEventListener("click", () => el("inLogo").click());
 
 // Background upload — recompress to JPEG sized for the card.
 el("inBg").addEventListener("change", (e) => {
@@ -1503,7 +1561,7 @@ async function buildSharePayload(name) {
       title: s.title, value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot,
       kind: s.kind, compile: s.compile,
       bg: { type: s.bg.type, name: s.bg.name, transform: s.bg.transform },
-      logo: { zoom: (s.logo && s.logo.zoom) || 1 },
+      logo: { zoom: (s.logo && s.logo.zoom) || 1, offsetX: (s.logo && s.logo.offsetX) || 0, offsetY: (s.logo && s.logo.offsetY) || 0 },
     };
     if (s.bg.type === "custom" && s.bg.dataUrl) card.bg.img = await ref(s.bg.dataUrl, "bg");
     if (s.logo && s.logo.dataUrl) card.logo.img = await ref(s.logo.dataUrl, "logo");
@@ -1908,7 +1966,7 @@ async function regenMissingThumbs() {
     return;
   }
 
-  renderHint.textContent = "Tip: hold Ctrl and drag to move the background · Ctrl + scroll to zoom.";
+  renderHint.textContent = "Tip: hold Shift and drag to move the background · Shift + scroll to zoom · over the logo it moves/zooms the logo.";
   await scheduleRender();
   await checkSharedDeck(); // import a deck if the URL carries one
 })();

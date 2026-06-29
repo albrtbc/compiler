@@ -295,7 +295,7 @@ code {
   display: block;
   touch-action: none;
 }
-#cardCanvas.draggable { cursor: grab; }
+#cardCanvas.shift-grab { cursor: grab; } /* only while Shift is held (pan/zoom mode) */
 #cardCanvas.grabbing { cursor: grabbing; }
 .render-hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; min-height: 14px; }
 
@@ -323,7 +323,33 @@ code {
   transition: background 0.12s, box-shadow 0.12s;
 }
 .card-overlay .ovl-multiline { white-space: pre-wrap; overflow-wrap: anywhere; }
-.card-overlay.panning .ovl { pointer-events: none; } /* let Ctrl+drag/scroll pan the background */
+.card-overlay.panning .ovl,
+.card-overlay.panning .ovl-logo { pointer-events: none; } /* let Ctrl+drag/scroll pan the background */
+/* clickable logo hotspot over the hexagon */
+.card-overlay .ovl-logo {
+  position: absolute;
+  display: none; /* positioned + shown by layoutOverlay */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15em;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1.5px dashed rgba(65, 224, 208, 0.55);
+  border-radius: 14px;
+  background: rgba(10, 12, 18, 0.32);
+  color: rgba(255, 255, 255, 0.82);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.card-overlay .ovl-logo:hover { background: rgba(65, 224, 208, 0.18); border-color: var(--accent); }
+.card-overlay .ovl-logo .ovl-logo-ico { font-size: 1.7em; line-height: 1; font-weight: 700; }
+.card-overlay .ovl-logo .ovl-logo-txt { font-size: 0.62em; letter-spacing: 1.5px; text-transform: uppercase; }
+/* once a logo is set, stay out of the way until hovered, then offer a swap */
+.card-overlay .ovl-logo.has-logo { opacity: 0; border-color: transparent; background: transparent; }
+.card-overlay .ovl-logo.has-logo:hover { opacity: 1; background: rgba(10, 12, 18, 0.5); border-style: solid; border-color: var(--accent); }
+.card-overlay .ovl-logo.has-logo .ovl-logo-txt { display: none; }
 /* contenteditable panels: placeholder + match canvas glyph widths (bold uses the bold face) */
 .card-overlay .ovl[contenteditable]:empty::before {
   content: attr(data-placeholder);
