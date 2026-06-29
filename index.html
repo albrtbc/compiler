@@ -39,11 +39,6 @@
         <input id="inTitle" type="text" maxlength="40" placeholder="FIRE" autocomplete="off" />
       </div>
 
-      <div class="field protocol-only">
-        <label for="inValue">Value</label>
-        <input id="inValue" type="text" maxlength="6" placeholder="7" autocomplete="off" inputmode="numeric" />
-      </div>
-
       <div class="field">
         <label>Logo</label>
         <div class="row">
@@ -87,7 +82,11 @@
       </div>
 
       <div class="protocol-only">
-        <div class="divider"><span>Text panels</span></div>
+        <div class="divider"><span>Value &amp; text</span></div>
+        <div class="field">
+          <label for="inValue">Value</label>
+          <input id="inValue" type="text" maxlength="6" placeholder="7" autocomplete="off" inputmode="numeric" />
+        </div>
         <div class="field">
           <label for="inTop">Top panel</label>
           <textarea id="inTop" rows="3" placeholder="Optional text…"></textarea>
@@ -144,11 +143,20 @@
       <p id="renderHint" class="render-hint">Loading fonts and assets…</p>
     </section>
 
-    <!-- ============ DECK ============ -->
-    <aside class="panel deck" aria-label="Deck">
-      <div class="deck-head">
-        <h2>Deck <span id="deckCount" class="count">0</span></h2>
+    <!-- ============ RIGHT COLUMN: DECK + MY DECKS ============ -->
+    <div class="rightcol">
+      <aside class="panel deck" aria-label="Deck">
+        <div class="deck-head">
+          <h2>Deck <span id="deckCount" class="count">0</span></h2>
+        </div>
+
+        <div class="deck-name-row">
+          <input id="inDeckName" type="text" maxlength="50" placeholder="Untitled deck" autocomplete="off" />
+          <button id="btnSaveDeck" class="btn btn-sm btn-primary" type="button">Save</button>
+        </div>
         <div class="deck-menu">
+          <button id="btnNewDeck" class="btn btn-sm" type="button">＋ New</button>
+          <button id="btnShareDeck" class="btn btn-sm" type="button">🔗 Share</button>
           <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
           <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63×88mm, with backs)">PDF</button>
           <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
@@ -158,18 +166,42 @@
           </label>
           <button id="btnClearDeck" class="btn btn-sm btn-danger" type="button">Clear all</button>
         </div>
-      </div>
-      <div id="deckEmpty" class="deck-empty">
-        No cards yet.<br />Press <b>“Add to deck”</b> to save the current card.
-      </div>
-      <div id="deckList" class="deck-list"></div>
-    </aside>
+
+        <div id="deckEmpty" class="deck-empty">
+          No cards yet.<br />Press <b>“Add to deck”</b> to save the current card.
+        </div>
+        <div id="deckList" class="deck-list"></div>
+      </aside>
+
+      <aside class="panel mydecks" aria-label="My decks">
+        <div class="deck-head">
+          <h2>My decks <span id="savedCount" class="count">0</span></h2>
+        </div>
+        <div id="savedList" class="saved-list"></div>
+      </aside>
+    </div>
   </main>
+
+  <div id="shareView" class="share-view" hidden>
+    <div class="share-view-head">
+      <div class="share-view-title">
+        <span class="brand-mark">◆</span>
+        <h2 id="shareViewTitle">Shared deck</h2>
+        <span id="shareViewCount" class="count">0</span>
+      </div>
+      <div class="share-view-actions">
+        <button id="shareImport" class="btn btn-primary" type="button">⬇ Import to my editor</button>
+        <button id="shareClose" class="btn btn-ghost" type="button">Close</button>
+      </div>
+    </div>
+    <div id="shareGrid" class="share-grid"></div>
+  </div>
 
   <div id="modalOverlay" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <h3 id="modalTitle">Delete card?</h3>
       <p id="modalBody" class="modal-body"></p>
+      <input id="modalInput" class="modal-input" type="text" hidden />
       <div class="modal-actions">
         <button id="modalCancel" class="btn btn-ghost" type="button">Cancel</button>
         <button id="modalConfirm" class="btn btn-danger" type="button">Delete</button>

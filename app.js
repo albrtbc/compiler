@@ -989,6 +989,7 @@ el("btnAddDeck").addEventListener("click", async () => {
     saveDeck();
     renderDeck();
   }
+  autosaveNamedDeck(); // keep the saved deck in sync if it has a name
   clearForNextCard(); // reset value + panels (keep protocol, logo, background)
 });
 
@@ -1075,6 +1076,7 @@ function dupCard(id) {
   deck.push({ id: newId(), state: JSON.parse(JSON.stringify(card.state)), thumb: card.thumb });
   saveDeck();
   renderDeck();
+  autosaveNamedDeck();
 }
 
 async function dlCard(card) {
@@ -1084,23 +1086,323 @@ async function dlCard(card) {
   downloadCanvas(off, safeName(card.state.title) + ".png");
 }
 
-/* ---------------- Confirm modal ---------------- */
+/* ---------------- Modal (confirm / prompt / share) ---------------- */
 let modalResolve = null;
-function showConfirm({ title, body, confirmLabel = "Delete" }) {
-  el("modalTitle").textContent = title;
-  el("modalBody").textContent = body;
-  el("modalConfirm").textContent = confirmLabel;
+function showModal(opts) {
+  const o = Object.assign({ title: "", body: "", confirmLabel: "OK", cancelLabel: "Cancel", danger: false, input: false, value: "", readonly: false }, opts);
+  el("modalTitle").textContent = o.title;
+  el("modalBody").textContent = o.body;
+  el("modalBody").hidden = !o.body;
+  const inp = el("modalInput");
+  inp.hidden = !o.input;
+  if (o.input) { inp.value = o.value; inp.readOnly = !!o.readonly; }
+  const conf = el("modalConfirm");
+  conf.textContent = o.confirmLabel;
+  conf.classList.toggle("btn-danger", !!o.danger);
+  conf.classList.toggle("btn-primary", !o.danger);
+  el("modalCancel").textContent = o.cancelLabel;
   el("modalOverlay").hidden = false;
+  if (o.input) setTimeout(() => { inp.focus(); inp.select(); }, 30);
   return new Promise((resolve) => { modalResolve = resolve; });
 }
-function closeModal(result) {
+function showConfirm({ title, body, confirmLabel = "Delete", danger = true }) {
+  return showModal({ title, body, confirmLabel, danger });
+}
+function closeModal(ok) {
+  const inp = el("modalInput");
+  const editable = !inp.hidden && !inp.readOnly;
   el("modalOverlay").hidden = true;
-  if (modalResolve) { modalResolve(result); modalResolve = null; }
+  if (modalResolve) {
+    const r = !ok ? (editable ? null : false) : (editable ? inp.value : true);
+    modalResolve(r); modalResolve = null;
+  }
 }
 el("modalConfirm").addEventListener("click", () => closeModal(true));
 el("modalCancel").addEventListener("click", () => closeModal(false));
 el("modalOverlay").addEventListener("click", (e) => { if (e.target === el("modalOverlay")) closeModal(false); });
+el("modalInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && !el("modalInput").readOnly) closeModal(true); });
 document.addEventListener("keydown", (e) => { if (!el("modalOverlay").hidden && e.key === "Escape") closeModal(false); });
+
+/* ---------------- Saved decks library ---------------- */
+let savedDecks = [];
+let currentDeckId = null;   // id of the loaded saved deck (null = unsaved working deck)
+let currentDeckName = "";
+
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function loadSavedDecks() {
+  try { savedDecks = (await idbGet("savedDecks")) || []; } catch (e) { savedDecks = []; }
+  if (!Array.isArray(savedDecks)) savedDecks = [];
+  try { const m = await idbGet("currentDeckMeta"); if (m) { currentDeckId = m.id || null; currentDeckName = m.name || ""; } } catch (e) {}
+}
+function saveSavedDecks() { idbSet("savedDecks", savedDecks).catch((e) => console.warn("saveSavedDecks", e)); }
+function saveDeckMeta() { idbSet("currentDeckMeta", { id: currentDeckId, name: currentDeckName }).catch(() => {}); }
+
+// The background used by a deck (first card that has one) for its row thumbnail.
+function deckBgSrc(d) {
+  for (const c of d.cards || []) {
+    const bg = c.state && c.state.bg;
+    if (bg && bg.type === "preset" && bg.name) return `card-backgrounds/thumbs/${bg.name}.jpg`;
+    if (bg && bg.type === "custom" && bg.dataUrl) return bg.dataUrl;
+  }
+  return null;
+}
+
+function renderSavedDecks() {
+  el("savedCount").textContent = savedDecks.length;
+  const list = el("savedList");
+  list.innerHTML = "";
+  savedDecks.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).forEach((d) => {
+    const row = document.createElement("div");
+    row.className = "saved-row" + (d.id === currentDeckId ? " current" : "");
+    const src = deckBgSrc(d);
+    if (src) {
+      row.style.backgroundImage = `linear-gradient(90deg, rgba(8,10,16,0.86), rgba(8,10,16,0.5)), url('${src}')`;
+      row.style.backgroundSize = "cover";
+      row.style.backgroundPosition = "center";
+    }
+    row.title = "Load this deck";
+    row.innerHTML = `<span class="sd-name">${escapeHtml(d.name)}</span><span class="sd-meta">${d.cards.length} cards</span><button class="del" title="Delete">🗑</button>`;
+    row.addEventListener("click", () => loadSavedDeck(d.id));
+    row.querySelector(".del").addEventListener("click", (e) => { e.stopPropagation(); deleteSavedDeck(d.id); });
+    list.appendChild(row);
+  });
+}
+
+// Upsert the working deck into the library BY NAME (update the deck with this exact
+// name, otherwise create a new one — so renaming + saving makes a separate deck).
+function upsertSavedDeck(name) {
+  currentDeckName = name;
+  const cards = JSON.parse(JSON.stringify(deck));
+  let d = savedDecks.find((x) => x.name === name);
+  if (d) { d.cards = cards; d.updatedAt = Date.now(); currentDeckId = d.id; }
+  else { currentDeckId = newId(); savedDecks.push({ id: currentDeckId, name, cards, updatedAt: Date.now() }); }
+  saveSavedDecks(); saveDeckMeta(); renderSavedDecks();
+}
+
+// If the deck already has a name, keep its saved copy in sync on every change.
+function autosaveNamedDeck() {
+  const name = el("inDeckName").value.trim();
+  if (name) upsertSavedDeck(name);
+}
+
+let deckSaveFlash = null;
+async function saveCurrentDeck() {
+  if (!deck.length) { alert("The deck is empty — add some cards first."); return; }
+  let name = el("inDeckName").value.trim();
+  if (!name) {
+    name = await showModal({ title: "Save deck", body: "Name this deck:", input: true, value: currentDeckName || "My deck", confirmLabel: "Save", danger: false });
+    if (name === null) return;
+    name = name.trim() || "Untitled deck";
+    el("inDeckName").value = name;
+  }
+  upsertSavedDeck(name);
+  const b = el("btnSaveDeck"); b.textContent = "✓ Saved"; clearTimeout(deckSaveFlash);
+  deckSaveFlash = setTimeout(() => { b.textContent = "Save"; }, 1100);
+}
+
+function loadSavedDeck(id) {
+  const d = savedDecks.find((x) => x.id === id);
+  if (!d) return;
+  deck = d.cards.map((c) => ({ id: c.id || newId(), state: normalizeState(c.state || c), thumb: c.thumb || "" }));
+  currentDeckId = id; currentDeckName = d.name; el("inDeckName").value = d.name;
+  setEditing(null); saveDeck(); saveDeckMeta();
+  renderDeck(); renderSavedDecks();
+  regenMissingThumbs().then(renderDeck);
+}
+
+async function deleteSavedDeck(id) {
+  const d = savedDecks.find((x) => x.id === id);
+  if (!d) return;
+  const ok = await showConfirm({ title: "Delete saved deck?", body: `Delete “${d.name}” from your saved decks? This can't be undone.` });
+  if (!ok) return;
+  savedDecks = savedDecks.filter((x) => x.id !== id);
+  if (currentDeckId === id) { currentDeckId = null; saveDeckMeta(); }
+  saveSavedDecks(); renderSavedDecks();
+}
+
+el("btnSaveDeck").addEventListener("click", saveCurrentDeck);
+el("inDeckName").addEventListener("input", () => { currentDeckName = el("inDeckName").value; saveDeckMeta(); });
+
+el("btnNewDeck").addEventListener("click", async () => {
+  if (deck.length) {
+    const ok = await showModal({ title: "New deck?", body: "Start a new empty deck? (Save your current one first if you want to keep it.)", confirmLabel: "New deck", danger: false });
+    if (!ok) return;
+  }
+  deck = []; currentDeckId = null; currentDeckName = ""; el("inDeckName").value = "";
+  setEditing(null); saveDeck(); saveDeckMeta(); renderDeck(); renderSavedDecks();
+});
+
+/* ---------------- Share link (compressed deck in the URL hash) ---------------- */
+async function gzipStr(str) {
+  const cs = new CompressionStream("gzip");
+  const w = cs.writable.getWriter();
+  w.write(new TextEncoder().encode(str)); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function gunzipToStr(bytes) {
+  const ds = new DecompressionStream("gzip");
+  const w = ds.writable.getWriter();
+  w.write(bytes); w.close();
+  return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
+}
+function bytesToB64url(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlToBytes(b64) {
+  b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4) b64 += "=";
+  const bin = atob(b64);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+
+// Build a compact share payload: uploaded images are stored ONCE in a pool and
+// referenced by index (cards in a protocol usually share one bg/logo), and they're
+// re-encoded smaller so the link fits in a URL. Thumbnails/ids are dropped.
+async function buildSharePayload(name) {
+  const imgs = [];
+  const cache = new Map(); // original dataUrl -> pool index
+  async function ref(url, kind) {
+    if (!url) return undefined;
+    if (cache.has(url)) return cache.get(url);
+    let small = url;
+    try {
+      small = kind === "logo"
+        ? await normalizeImage(url, 256, 256, "image/png")
+        : await normalizeImage(url, 720, 1010, "image/jpeg", 0.8);
+    } catch (e) {}
+    const i = imgs.length; imgs.push(small); cache.set(url, i); return i;
+  }
+  const cards = [];
+  for (const c of deck) {
+    const s = c.state;
+    const card = {
+      title: s.title, value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot,
+      kind: s.kind, compile: s.compile,
+      bg: { type: s.bg.type, name: s.bg.name, transform: s.bg.transform },
+      logo: { zoom: (s.logo && s.logo.zoom) || 1 },
+    };
+    if (s.bg.type === "custom" && s.bg.dataUrl) card.bg.img = await ref(s.bg.dataUrl, "bg");
+    if (s.logo && s.logo.dataUrl) card.logo.img = await ref(s.logo.dataUrl, "logo");
+    cards.push(card);
+  }
+  return { v: 2, name, imgs, cards };
+}
+
+el("btnShareDeck").addEventListener("click", async () => {
+  if (!deck.length) { alert("The deck is empty."); return; }
+  const btn = el("btnShareDeck");
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
+  let url;
+  try {
+    const payload = await buildSharePayload(el("inDeckName").value.trim() || "Shared deck");
+    const json = JSON.stringify(payload);
+    let encoded;
+    try { encoded = bytesToB64url(await gzipStr(json)); }
+    catch (e) { encoded = bytesToB64url(new TextEncoder().encode(json)); }
+    url = `${location.origin}${location.pathname}#deck=${encoded}`;
+  } finally { btn.disabled = false; btn.textContent = orig; }
+  const big = url.length > 60000;
+  const ok = await showModal({
+    title: "Share deck",
+    body: big
+      ? "This deck is very heavy (lots of unique uploaded images), so the link is large — it works in a browser but may be too long to paste in some chats. Use Export/Import (file) as a fallback."
+      : "Anyone who opens this link sees the deck and can import it. (≈" + Math.round(url.length / 1024) + " KB)",
+    input: true, value: url, readonly: true, confirmLabel: "Copy link", cancelLabel: "Close", danger: false,
+  });
+  if (ok) { try { await navigator.clipboard.writeText(url); } catch (e) {} }
+});
+
+// Order: the Protocol card (landscape) first, then the rest by value ascending.
+function sortDeckStates(states) {
+  return states.slice().sort((a, b) => {
+    const pa = a.kind === "compile" ? 0 : 1; // kind "compile" = landscape = the "Protocol card"
+    const pb = b.kind === "compile" ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    if (pa === 0) return 0;
+    return (parseFloat(a.value) || 0) - (parseFloat(b.value) || 0);
+  });
+}
+
+// On load: if the URL carries a shared deck, show it in a gallery (view or import).
+let sharedStates = null;
+async function checkSharedDeck() {
+  const m = location.hash.match(/[#&]deck=([^&]+)/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search); // clear the hash
+  let data;
+  try {
+    const bytes = b64urlToBytes(m[1]);
+    let json;
+    try { json = await gunzipToStr(bytes); } catch (e) { json = new TextDecoder().decode(bytes); }
+    data = JSON.parse(json);
+  } catch (e) { console.warn("Shared deck decode failed:", e); alert("This share link could not be read."); return; }
+  const name = (data && data.name) || "Shared deck";
+  let states;
+  if (data && data.v === 2 && Array.isArray(data.imgs)) {
+    // v2: images are deduplicated in data.imgs, referenced by index per card
+    states = (data.cards || []).map((card) => {
+      const bg = Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, card.bg || {});
+      if (card.bg && typeof card.bg.img === "number") bg.dataUrl = data.imgs[card.bg.img];
+      const logo = { dataUrl: (card.logo && typeof card.logo.img === "number") ? data.imgs[card.logo.img] : null, zoom: (card.logo && card.logo.zoom) || 1 };
+      return normalizeState(Object.assign({}, card, { bg, logo }));
+    });
+  } else {
+    const raw = Array.isArray(data) ? data : (data && data.cards) || [];
+    states = raw.map((c) => normalizeState(c.state || c));
+  }
+  if (!states.length) return;
+  await openShareView(name, states);
+}
+
+// Full-resolution front image (crisp when shown large in the share gallery).
+async function renderFrontImage(st) {
+  const off = document.createElement("canvas");
+  if (st.kind === "compile") await renderCompileLandscape(st, "front", off);
+  else { off.width = CARD_W; off.height = CARD_H; await renderCard(st, off); }
+  return off.toDataURL("image/jpeg", 0.9);
+}
+
+async function openShareView(name, states) {
+  sharedStates = states;
+  el("shareViewTitle").textContent = name;
+  el("shareViewCount").textContent = states.length;
+  const grid = el("shareGrid");
+  grid.innerHTML = '<div class="sg-empty">Rendering cards…</div>';
+  el("shareView").hidden = false;
+  const sorted = sortDeckStates(states);
+  const cardHtml = async (st) => {
+    let url = "";
+    try { url = await renderFrontImage(st); } catch (e) {}
+    const isProtocol = st.kind === "compile";
+    const label = isProtocol ? "PROTOCOL" : (String(st.value).trim() ? "VALUE " + st.value : (st.title || "—"));
+    return `<div class="sg-card${isProtocol ? " sg-landscape" : ""}"><img src="${url}" alt=""><span class="sg-label">${escapeHtml(label)}</span></div>`;
+  };
+  const proto = [], values = [];
+  for (const st of sorted) (st.kind === "compile" ? proto : values).push(await cardHtml(st));
+  let html = "";
+  if (proto.length) html += `<div class="sg-protocol">${proto.join("")}</div>`;
+  if (values.length) html += `<div class="sg-values">${values.join("")}</div>`;
+  grid.innerHTML = html || '<div class="sg-empty">Empty deck.</div>';
+}
+
+function closeShareView() { el("shareView").hidden = true; sharedStates = null; }
+el("shareClose").addEventListener("click", closeShareView);
+document.addEventListener("keydown", (e) => { if (!el("shareView").hidden && e.key === "Escape") closeShareView(); });
+el("shareImport").addEventListener("click", async () => {
+  if (!sharedStates) { closeShareView(); return; }
+  const states = sharedStates;
+  const name = el("shareViewTitle").textContent || "Shared deck";
+  closeShareView();
+  deck = states.map((st) => ({ id: newId(), state: st, thumb: "" }));
+  currentDeckId = null; currentDeckName = name; el("inDeckName").value = name;
+  setEditing(null); saveDeck(); saveDeckMeta(); renderDeck();
+  await regenMissingThumbs(); renderDeck();
+});
 
 async function delCard(id) {
   const card = deck.find((d) => d.id === id);
@@ -1111,6 +1413,7 @@ async function delCard(id) {
   if (editingId === id) setEditing(null);
   saveDeck();
   renderDeck();
+  autosaveNamedDeck();
 }
 
 
@@ -1249,13 +1552,24 @@ el("btnExportDeck").addEventListener("click", () => {
 });
 
 el("btnClearDeck").addEventListener("click", async () => {
-  if (deck.length === 0) { alert("The deck is already empty."); return; }
-  const ok = await showConfirm({ title: "Clear deck?", body: `Delete ALL ${deck.length} cards from the deck? This can't be undone.`, confirmLabel: "Delete all" });
+  const ok = await showConfirm({
+    title: "Clear all?",
+    body: "This empties the deck and resets the editor fields, and deselects the background (your uploaded backgrounds are kept). This can't be undone.",
+    confirmLabel: "Clear all",
+  });
   if (!ok) return;
   deck = [];
+  state = defaultState();          // blank editor; background deselected (uploads in customBgs stay)
+  compileSide = "front";
+  currentDeckId = null;
+  currentDeckName = "";
+  el("inDeckName").value = "";
   setEditing(null);
   saveDeck();
+  saveDeckMeta();
+  syncStateToForm();               // refreshes the form + deselects bg via refreshBgSelection
   renderDeck();
+  scheduleRender();
 });
 
 el("inImportDeck").addEventListener("change", (e) => {
@@ -1302,7 +1616,10 @@ async function regenMissingThumbs() {
   buildBgGrid();
   await loadDeck();
   await loadCurrent();
+  await loadSavedDecks();
+  el("inDeckName").value = currentDeckName;
   renderDeck();
+  renderSavedDecks();
   syncStateToForm();
 
   try {
@@ -1331,4 +1648,5 @@ async function regenMissingThumbs() {
 
   renderHint.textContent = "Tip: hold Ctrl and drag to move the background · Ctrl + scroll to zoom.";
   await scheduleRender();
+  await checkSharedDeck(); // import a deck if the URL carries one
 })();

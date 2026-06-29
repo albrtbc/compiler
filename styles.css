@@ -95,7 +95,9 @@ body {
   flex-direction: column;
   align-items: center;
 }
-.deck { padding: 16px; position: sticky; top: 84px; }
+.rightcol { display: flex; flex-direction: column; gap: 18px; min-width: 0; position: sticky; top: 84px; }
+.deck { padding: 16px; }
+.mydecks { padding: 16px; }
 
 /* ===== Fields ===== */
 .field { margin-bottom: 16px; }
@@ -385,7 +387,7 @@ code {
 /* ===== Responsive ===== */
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 1fr 1fr; }
-  .deck { grid-column: 1 / -1; position: static; }
+  .rightcol { grid-column: 1 / -1; position: static; }
   .deck-list { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 }
 @media (max-width: 720px) {
@@ -405,6 +407,63 @@ code {
   background: #05070c;
   padding: 2px;
 }
+
+/* ===== Shared-deck gallery ===== */
+.share-view[hidden] { display: none; }
+.share-view {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, #1a2336 0%, transparent 60%),
+    var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.share-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(12, 14, 20, 0.8);
+  backdrop-filter: blur(10px);
+  flex-wrap: wrap;
+}
+.share-view-title { display: flex; align-items: center; gap: 10px; }
+.share-view-title h2 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+.share-view-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.share-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 28px;
+}
+.sg-protocol { display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; }
+.sg-protocol .sg-card { width: min(620px, 100%); }   /* landscape card at a generous size */
+.sg-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 22px;
+  align-content: start;
+}
+.share-grid .sg-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.share-grid .sg-card img { width: 100%; height: auto; border-radius: 6px; display: block; background: #05070c; }
+.share-grid .sg-card .sg-label { font-size: 11px; color: var(--muted); font-weight: 700; letter-spacing: 0.5px; }
+.share-grid .sg-empty { color: var(--muted); padding: 30px; }
 
 /* ===== Modal ===== */
 .modal-overlay[hidden] { display: none; }
@@ -429,8 +488,74 @@ code {
   width: 100%;
 }
 .modal h3 { margin: 0 0 8px; font-size: 16px; letter-spacing: 0.5px; }
-.modal-body { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 20px; }
+.modal-body { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 16px; }
+.modal-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  margin: 0 0 18px;
+}
+.modal-input:focus { outline: none; border-color: var(--accent-2); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ===== Saved decks library ===== */
+.deck-name-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.deck-name-row input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.deck-name-row input:focus { outline: none; border-color: var(--accent-2); }
+.saved-decks { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.saved-decks summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+}
+.saved-decks[open] summary { border-bottom: 1px solid var(--line); }
+.saved-list { max-height: 55vh; overflow-y: auto; }
+.saved-list:empty::after { content: "No saved decks yet."; display: block; padding: 12px; color: var(--muted); font-size: 12px; }
+.saved-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--line);
+  background-color: var(--panel-2);
+  background-size: cover;
+  background-position: center;
+}
+.saved-row:last-child { border-bottom: none; }
+.saved-row { cursor: pointer; transition: box-shadow 0.12s; }
+.saved-row:hover { box-shadow: inset 0 0 0 2px var(--line-2); }
+.saved-row .sd-name { flex: 1; font-size: 14px; font-weight: 700; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
+.saved-row .sd-meta { color: #d6dcea; font-size: 11px; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
+.saved-row button.del {
+  background: rgba(8, 10, 16, 0.7);
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  color: var(--danger);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer;
+}
+.saved-row button.del:hover { background: rgba(255, 107, 107, 0.16); border-color: var(--danger); }
+.saved-row.current { box-shadow: inset 0 0 0 2px var(--accent); }
+.saved-row.current:hover { box-shadow: inset 0 0 0 2px var(--accent); }
+.saved-list::-webkit-scrollbar { width: 8px; }
+.saved-list::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; }
 
 /* scrollbar */
 .deck-list::-webkit-scrollbar { width: 8px; }
