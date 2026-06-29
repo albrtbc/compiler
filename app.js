@@ -15,7 +15,7 @@ const CARD_H = 1039;
 
 // Zone coordinates measured against the 744×1039 frame.
 const ZONES = {
-  title: { x: 48, y: 38, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18 },
+  title: { x: 39, y: 31, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18 },
   value: { x: 292, y: 40, w: 159, h: 175, font: "HackedKerX", max: 161, min: 28, dy: 10, dx: 7 },
   hex:   { x: 583, y: 36, w: 124, h: 135, pointy: "v", flatA: 0.26, flatB: 0.85 }, // covers the frame hexagon
   panels: {
