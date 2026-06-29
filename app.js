@@ -1530,10 +1530,10 @@ async function renderCompileVerticalJpeg(st, side) {
   return off.toDataURL("image/jpeg", 0.92);
 }
 
-let cardBackJpeg = null;
-async function getCardBackJpeg() {
-  if (cardBackJpeg) return cardBackJpeg;
-  const img = await loadImage("card-back/cardback.jpg");
+let cardBackPng = null;
+async function getCardBackPng() {
+  if (cardBackPng) return cardBackPng;
+  const img = await loadImage("card-back/cardback.png");
   const off = document.createElement("canvas");
   off.width = CARD_W;
   off.height = CARD_H;
@@ -1541,8 +1541,8 @@ async function getCardBackJpeg() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, CARD_W, CARD_H);
   drawBackground(ctx, img, defaultTransform()); // cover-fit into the card aspect
-  cardBackJpeg = off.toDataURL("image/jpeg", 0.92);
-  return cardBackJpeg;
+  cardBackPng = off.toDataURL("image/png"); // lossless: best quality for print & play
+  return cardBackPng;
 }
 
 // Crop ticks in the page margins (don't mark the cards, which are edge-to-edge).
@@ -1574,7 +1574,7 @@ el("btnExportPDF").addEventListener("click", async () => {
     const pageW = 210, pageH = 297;
     const mx = (pageW - W * cols) / 2, my = (pageH - H * rows) / 2;
     const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
-    const back = await getCardBackJpeg();
+    const back = await getCardBackPng();
     const pages = Math.ceil(deck.length / per);
     let firstPage = true;
     for (let p = 0; p < pages; p++) {
@@ -1602,7 +1602,7 @@ el("btnExportPDF").addEventListener("click", async () => {
           const burl = await renderCompileVerticalJpeg(st, "back");
           pdf.addImage(burl, "JPEG", mx + col * W, my + row * H, W, H);
         } else {
-          pdf.addImage(back, "JPEG", mx + col * W, my + row * H, W, H, "cardback");
+          pdf.addImage(back, "PNG", mx + col * W, my + row * H, W, H, "cardback");
         }
       }
     }

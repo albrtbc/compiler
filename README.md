@@ -52,7 +52,7 @@ index.html              · UI
 styles.css              · styles (dark theme)
 app.js                  · canvas render engine + deck logic
 card-frame/             · frame.png + panel_top/mid/bot.png
-card-back/              · cardback.jpg (used for the print & play PDF)
+card-back/              · cardback.png (used for the print & play PDF)
 fonts/                  · TT-Supermolot-Regular/Bold.ttf, Hacked-KerX.ttf
 card-backgrounds/       · 15 preset backgrounds (+ thumbs/ for the picker)
 vendor/                 · jspdf.umd.min.js (PDF generation, MIT)
