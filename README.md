@@ -4,7 +4,7 @@ A static web **card builder / deckbuilder** — no build step, no dependencies, 
 
 Cards are composed from a fixed frame, optional text panels, a background, a large center value and a protocol logo. All text and logos render in **white** over the frame.
 
-> **Live demo:** https://albrtbc.github.io/compiler/ *(enable GitHub Pages — see below)*
+> **Live demo:** https://albrtbc.github.io/compiler/
 
 ## Features
 
@@ -35,15 +35,6 @@ python3 -m http.server 8080
 # then open http://localhost:8080
 ```
 
-## Deploy to GitHub Pages
-
-1. Push this repository to GitHub (already done if you cloned it).
-2. On GitHub: **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
-3. Choose branch **`main`** and folder **`/ (root)`**, then **Save**.
-4. After a minute the site is live at `https://<user>.github.io/<repo>/` (e.g. `https://albrtbc.github.io/compiler/`).
-
-The `.nojekyll` file tells GitHub Pages to serve the files as-is (no Jekyll processing).
-
 ## Deck file (export / import)
 
 `deck.json` is fully portable:
@@ -61,15 +52,3 @@ card-frame/             · frame.png + panel_top/mid/bot.png
 fonts/                  · TT-Supermolot-Regular/Bold.ttf, Hacked-KerX.ttf
 card-backgrounds/       · 15 preset backgrounds (+ thumbs/ for the picker)
 ```
-
-## Customizing the zones
-
-The coordinates for the title, value, hexagon and panels are measured against the frame
-and defined in the `ZONES` constant at the top of `app.js`. If you replace `frame.png`,
-adjust those rectangles to match.
-
-## Assets & licensing
-
-The source code (`index.html`, `styles.css`, `app.js`) is open source. The bundled
-fonts (TT Supermolot, Hacked-KerX) and background artwork are included for convenience —
-check their respective licenses before redistributing or using commercially.
