@@ -19,10 +19,11 @@ Cards are composed from a fixed frame, optional text panels, a background, a lar
 - **Background pan & zoom** — drag the card to move the background, scroll to zoom (anchored at the cursor), with a zoom slider and reset.
 - **Layers** (back → front): background → panels → frame → text → logo.
 - **Deck**
-  - Save cards, click a card to edit it, duplicate, download, or delete.
-  - **Save / Cancel** while editing; after saving, the value and panels clear (protocol, logo and background are kept) so the next card in the same protocol is quick to build.
+  - Add cards, click a card to edit it (Save updates it in place, "Add as new" clones it), duplicate, download, or delete.
+  - Decks stay ordered: the Protocol card first, then by value ascending.
+  - **My decks** library: save decks by name, load them later, delete. Named decks autosave on every change. Stored locally in **IndexedDB**.
   - **Clear all**, plus **Export** / **Import** the whole deck as a portable `.json`.
-  - Stored locally in **IndexedDB** (handles many cards with custom images).
+  - **Share** a deck as a short link: the deck is stored on a free service ([dpaste](https://dpaste.com)) and the link opens a read-only gallery where anyone can view or import it. (Links expire after long inactivity; for offline/permanent sharing use Export/Import.)
 - **Export** — download a single card, all cards as PNGs, or a **print & play PDF**.
   - The PDF lays out cards **3×3 per A4 page** at standard card size (63 × 88 mm), with
     crop marks and a card-back page after each fronts page for double-sided printing.

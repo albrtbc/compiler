@@ -1333,25 +1333,36 @@ async function buildSharePayload(name) {
   return { v: 2, name, imgs, cards };
 }
 
+const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
+
 el("btnShareDeck").addEventListener("click", async () => {
   if (!deck.length) { alert("The deck is empty."); return; }
   const btn = el("btnShareDeck");
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
-  let url;
+  let url, viaService = false;
   try {
-    const payload = await buildSharePayload(el("inDeckName").value.trim() || "Shared deck");
-    const json = JSON.stringify(payload);
-    let encoded;
-    try { encoded = bytesToB64url(await gzipStr(json)); }
-    catch (e) { encoded = bytesToB64url(new TextEncoder().encode(json)); }
-    url = `${location.origin}${location.pathname}#deck=${encoded}`;
+    const json = JSON.stringify(await buildSharePayload(el("inDeckName").value.trim() || "Shared deck"));
+    // Short link: store the deck in a free service so the URL fits anywhere.
+    try {
+      const body = new URLSearchParams({ content: json, syntax: "text", expiry_days: "365" });
+      const res = await fetch(DPASTE_API, { method: "POST", body }); // form-urlencoded → no CORS preflight
+      if (!res.ok) throw new Error("dpaste " + res.status);
+      const idd = (await res.text()).trim().split("/").filter(Boolean).pop();
+      if (!idd) throw new Error("no id");
+      url = `${location.origin}${location.pathname}#d=${idd}`;
+      viaService = true;
+    } catch (e) {
+      // fallback: inline-compressed link (long, but works without the service)
+      let encoded;
+      try { encoded = bytesToB64url(await gzipStr(json)); } catch (e2) { encoded = bytesToB64url(new TextEncoder().encode(json)); }
+      url = `${location.origin}${location.pathname}#deck=${encoded}`;
+    }
   } finally { btn.disabled = false; btn.textContent = orig; }
-  const big = url.length > 60000;
   const ok = await showModal({
     title: "Share deck",
-    body: big
-      ? "This deck is very heavy (lots of unique uploaded images), so the link is large — it works in a browser but may be too long to paste in some chats. Use Export/Import (file) as a fallback."
-      : "Anyone who opens this link sees the deck and can import it. (≈" + Math.round(url.length / 1024) + " KB)",
+    body: viaService
+      ? "Short link ready — anyone who opens it sees the deck and can import it. (Hosted on a free service; may expire after long inactivity.)"
+      : "Couldn't reach the link service, so this is a long self-contained link — it works in a browser but may be too long for some chats. Use Export/Import (file) as a fallback.",
     input: true, value: url, readonly: true, confirmLabel: "Copy link", cancelLabel: "Close", danger: false,
   });
   if (ok) { try { await navigator.clipboard.writeText(url); } catch (e) {} }
@@ -1371,16 +1382,24 @@ function sortDeckStates(states) {
 // On load: if the URL carries a shared deck, show it in a gallery (view or import).
 let sharedStates = null;
 async function checkSharedDeck() {
-  const m = location.hash.match(/[#&]deck=([^&]+)/);
-  if (!m) return;
+  const mId = location.hash.match(/[#&]d=([^&]+)/);   // short link (service-hosted)
+  const m = location.hash.match(/[#&]deck=([^&]+)/);  // inline link (self-contained)
+  if (!mId && !m) return;
   history.replaceState(null, "", location.pathname + location.search); // clear the hash
+  showShareLoading();
   let data;
   try {
-    const bytes = b64urlToBytes(m[1]);
-    let json;
-    try { json = await gunzipToStr(bytes); } catch (e) { json = new TextDecoder().decode(bytes); }
-    data = JSON.parse(json);
-  } catch (e) { console.warn("Shared deck decode failed:", e); alert("This share link could not be read."); return; }
+    if (mId) {
+      const res = await fetch(`https://dpaste.com/${mId[1]}.txt`);
+      if (!res.ok) throw new Error("dpaste fetch " + res.status);
+      data = JSON.parse(await res.text());
+    } else {
+      const bytes = b64urlToBytes(m[1]);
+      let json;
+      try { json = await gunzipToStr(bytes); } catch (e) { json = new TextDecoder().decode(bytes); }
+      data = JSON.parse(json);
+    }
+  } catch (e) { console.warn("Shared deck load failed:", e); el("shareView").hidden = true; alert("This shared deck could not be loaded (the link may be invalid or expired)."); return; }
   const name = (data && data.name) || "Shared deck";
   let states;
   if (data && data.v === 2 && Array.isArray(data.imgs)) {
@@ -1401,7 +1420,20 @@ async function checkSharedDeck() {
 
 // Pasting a share link while the page is already open only changes the hash
 // (no reload), so react to that too.
-window.addEventListener("hashchange", () => { if (/[#&]deck=/.test(location.hash)) checkSharedDeck(); });
+window.addEventListener("hashchange", () => { if (/[#&](deck|d)=/.test(location.hash)) checkSharedDeck(); });
+
+// Cover the page with a loading state while a shared deck is fetched/rendered,
+// so the editor doesn't flash behind it.
+function showShareLoading() {
+  el("shareImport").disabled = true;
+  el("shareGrid").innerHTML =
+    '<div class="loader">' +
+    '<div class="loader-spin"><span class="loader-diamond">◆</span></div>' +
+    '<div class="loader-text">Loading shared deck</div>' +
+    "</div>";
+  el("shareView").classList.add("loading");
+  el("shareView").hidden = false;
+}
 
 // Full-resolution front image (crisp when shown large in the share gallery).
 async function renderFrontImage(st) {
@@ -1416,8 +1448,8 @@ async function openShareView(name, states) {
   el("shareViewTitle").textContent = name;
   el("shareViewCount").textContent = states.length;
   const grid = el("shareGrid");
-  grid.innerHTML = '<div class="sg-empty">Rendering cards…</div>';
   el("shareView").hidden = false;
+  // keep the big centered loader visible while we render the card images
   const sorted = sortDeckStates(states);
   const cardHtml = async (st) => {
     let url = "";
@@ -1431,6 +1463,8 @@ async function openShareView(name, states) {
   let html = "";
   if (proto.length) html += `<div class="sg-protocol">${proto.join("")}</div>`;
   if (values.length) html += `<div class="sg-values">${values.join("")}</div>`;
+  el("shareView").classList.remove("loading");
+  el("shareImport").disabled = false;
   grid.innerHTML = html || '<div class="sg-empty">Empty deck.</div>';
 }
 
@@ -1657,6 +1691,9 @@ async function regenMissingThumbs() {
 
 /* ---------------- Init ---------------- */
 (async function init() {
+  // If the URL carries a shared deck, cover the page with a loading state right away
+  // so the editor doesn't flash before the gallery appears.
+  if (/[#&](deck|d)=/.test(location.hash)) showShareLoading();
   try { customBgs = (await idbGet("customBgs")) || []; } catch (e) { customBgs = []; }
   if (!Array.isArray(customBgs)) customBgs = [];
   buildBgGrid();

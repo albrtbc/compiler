@@ -465,6 +465,44 @@ code {
 .share-grid .sg-card .sg-label { font-size: 11px; color: var(--muted); font-weight: 700; letter-spacing: 0.5px; }
 .share-grid .sg-empty { color: var(--muted); padding: 30px; }
 
+/* loading state: hide the header and center a big branded loader */
+.share-view.loading .share-view-head { display: none; }
+.share-view.loading .share-grid { justify-content: center; align-items: center; }
+.loader { display: flex; flex-direction: column; align-items: center; gap: 26px; }
+.loader-spin {
+  position: relative;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  border: 4px solid rgba(65, 224, 208, 0.14);
+  border-top-color: var(--accent);
+  border-right-color: var(--accent-2);
+  animation: loader-spin 0.95s cubic-bezier(0.5, 0.1, 0.4, 0.9) infinite;
+  box-shadow: 0 0 40px rgba(65, 224, 208, 0.18);
+}
+.loader-diamond {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 38px;
+  text-shadow: 0 0 22px rgba(65, 224, 208, 0.85);
+  animation: loader-pulse 1.5s ease-in-out infinite;
+}
+.loader-text {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+.loader-text::after { content: ""; animation: loader-dots 1.4s steps(4, end) infinite; }
+@keyframes loader-spin { to { transform: rotate(360deg); } }
+@keyframes loader-pulse { 0%, 100% { transform: scale(0.82); opacity: 0.65; } 50% { transform: scale(1.12); opacity: 1; } }
+@keyframes loader-dots { 0% { content: ""; } 25% { content: "·"; } 50% { content: "··"; } 75% { content: "···"; } }
+
 /* ===== Modal ===== */
 .modal-overlay[hidden] { display: none; }
 .modal-overlay {
