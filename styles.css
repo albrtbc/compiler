@@ -193,6 +193,27 @@ code {
 .btn-ghost { background: transparent; }
 .btn-danger { border-color: rgba(255, 107, 107, 0.5); color: var(--danger); }
 .btn-danger:hover { background: rgba(255, 107, 107, 0.12); border-color: var(--danger); }
+
+/* Segmented toggles (card type, front/back) */
+.type-toggle, .seg { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
+.side-toggle { max-width: 220px; }
+.seg-btn {
+  flex: 1;
+  background: var(--panel-2);
+  border: none;
+  border-right: 1px solid var(--line-2);
+  color: var(--muted);
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-btn:last-child { border-right: none; }
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%); color: #04212a; }
 .btn-sm { padding: 6px 10px; font-size: 12px; }
 .btn-file { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
 .link { background: none; border: none; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
@@ -320,7 +341,7 @@ code {
   cursor: pointer;
   text-align: left;
 }
-.dc-open img { width: 100%; display: block; aspect-ratio: 744 / 1039; object-fit: cover; background: #000; transition: filter 0.15s; }
+.dc-open img { width: 100%; display: block; aspect-ratio: 744 / 1039; object-fit: contain; background: #05070c; transition: filter 0.15s; }
 .dc-open:hover img { filter: brightness(1.12); }
 .dc-open .dc-title {
   font-size: 11px;

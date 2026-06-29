@@ -29,6 +29,23 @@ const PANEL_MAX = 38;
 const PANEL_MIN = 13;
 const LINE_FACTOR = 1.18;
 
+// Compile card: designed/viewed in LANDSCAPE (the vertical frame rotated +90° CCW).
+const LAND_W = 1039, LAND_H = 744;
+const TEXT_SHADOW = { color: "rgba(0,0,0,0.7)", blur: 17, dx: 0, dy: 8 };
+const COMPILE_FRONT = {
+  topBar:   { x: 72, y: 40, w: 700, h: 80, font: "SupermolotR", max: 36, min: 14, align: "left", padX: 26 },
+  name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW },   // center ≈356
+  subtitle: { x: 60, y: 418, w: 930, h: 90, font: "MotionControl", max: 62, min: 16, shadow: TEXT_SHADOW },  // center ≈463
+  bottomBar:{ x: 84, y: 620, w: 928, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 },
+  hex:      { x: 867, y: 40, w: 124, h: 128, pad: 12 },   // hexagon center ≈(929,104)
+};
+const COMPILE_BACK = {
+  // name sits in the thick (left) part of the bottom bar, left-aligned at the same height as the back line
+  name:     { x: 78, y: 592, w: 510, h: 128, font: "HackedKerX", max: 104, min: 24, align: "left", padX: 30 }, // center ≈656
+  backLine: { x: 652, y: 626, w: 356, h: 84, font: "SupermolotR", max: 40, min: 14, align: "center", padX: 16 }, // center ≈668
+  hex:      { x: 867, y: 40, w: 124, h: 128, pad: 12 },   // hexagon center ≈(929,104)
+};
+
 const PRESETS = [
   "Water", "Love", "Apathy", "Spirit", "Fire", "Gravity", "Light", "Metal",
   "Death", "Hate", "Darkness", "Plague", "Psychic", "Speed", "Life",
@@ -52,6 +69,7 @@ const STORE_DECK = "deckbuilder.deck.v1";
 const STORE_CURRENT = "deckbuilder.current.v1";
 
 /* ---------------- State ---------------- */
+const defaultCompile = () => ({ top: "", subtitle: "LOADING...", bottom: "", back: "COMPILED" });
 const defaultState = () => ({
   title: "",
   value: "",
@@ -61,6 +79,8 @@ const defaultState = () => ({
   // type: none | preset | custom · transform pans/zooms the background
   bg: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
   logo: { dataUrl: null, white: true },
+  kind: "protocol", // "protocol" | "compile"
+  compile: defaultCompile(),
 });
 
 const defaultTransform = () => ({ scale: 1, offsetX: 0, offsetY: 0 });
@@ -82,7 +102,7 @@ function loadImage(src) {
   });
 }
 
-const assets = { frame: null, panels: {} };
+const assets = { frame: null, panels: {}, compileFrontLand: null, compileBackLand: null };
 const presetCache = new Map(); // name -> Image (full-res)
 const dataUrlCache = new Map(); // dataUrl -> Image
 
@@ -129,6 +149,7 @@ async function loadFonts() {
     ["SupermolotR", "fonts/TT-Supermolot-Regular.ttf"],
     ["SupermolotB", "fonts/TT-Supermolot-Bold.ttf"],
     ["HackedKerX", "fonts/Hacked-KerX.ttf"],
+    ["MotionControl", "fonts/motion-control.bold.otf"],
   ];
   await Promise.all(
     defs.map(([fam, url]) => {
@@ -179,6 +200,12 @@ function drawLine(ctx, text, zone, color) {
   ctx.font = `${size}px ${zone.font}`;
   ctx.fillStyle = color;
   ctx.textBaseline = "middle";
+  if (zone.shadow) {
+    ctx.shadowColor = zone.shadow.color || "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = zone.shadow.blur || 0;
+    ctx.shadowOffsetX = zone.shadow.dx || 0;
+    ctx.shadowOffsetY = zone.shadow.dy || 0;
+  }
   const cy = zone.y + zone.h / 2 + (zone.dy || 0);
   if (zone.align === "left") {
     ctx.textAlign = "left";
@@ -187,6 +214,8 @@ function drawLine(ctx, text, zone, color) {
     ctx.textAlign = "center";
     ctx.fillText(text, zone.x + zone.w / 2 + (zone.dx || 0), cy, availW);
   }
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
 }
 
 /* ---- Rich panel text: **bold** and __underline__ ---- */
@@ -304,18 +333,53 @@ function makeLogoCanvas(img, white) {
   return { canvas: off, w, h };
 }
 
+// Generic logo placement into an arbitrary {x,y,w,h,pad} box (used by the compile card).
+function drawLogoBox(ctx, img, white, box) {
+  const pad = box.pad || 0;
+  const scale = Math.min((box.w - pad * 2) / img.width, (box.h - pad * 2) / img.height);
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const off = document.createElement("canvas");
+  off.width = w; off.height = h;
+  const c = off.getContext("2d");
+  c.drawImage(img, 0, 0, w, h);
+  if (white) {
+    c.globalCompositeOperation = "source-in";
+    c.fillStyle = "#ffffff";
+    c.fillRect(0, 0, w, h);
+  }
+  ctx.drawImage(off, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2);
+}
+
+// Cover-fit an image into a w×h area, centred.
+function coverDraw(ctx, img, dw, dh) {
+  const s = Math.max(dw / img.width, dh / img.height);
+  ctx.drawImage(img, (dw - img.width * s) / 2, (dh - img.height * s) / 2, img.width * s, img.height * s);
+}
+
+// Rotate an image 90° counter-clockwise into a new canvas (vertical frame → landscape).
+function rotate90ccw(img) {
+  const c = document.createElement("canvas");
+  c.width = img.height; c.height = img.width;
+  const x = c.getContext("2d");
+  x.translate(0, c.height);
+  x.rotate(-Math.PI / 2);
+  x.drawImage(img, 0, 0);
+  return c;
+}
+
 /* ---------------- Background draw (cover + pan/zoom) ---------------- */
 // base "cover" scale so scale=1 exactly fills the card; the user transform
 // multiplies that scale and offsets from the centred position (card pixels).
-function bgBaseScale(img) {
-  return Math.max(CARD_W / img.width, CARD_H / img.height);
+function bgBaseScale(img, dw = CARD_W, dh = CARD_H) {
+  return Math.max(dw / img.width, dh / img.height);
 }
-function drawBackground(ctx, img, t) {
-  const s = bgBaseScale(img) * clampScale(t ? t.scale : 1);
+function drawBackground(ctx, img, t, dw = CARD_W, dh = CARD_H) {
+  const s = bgBaseScale(img, dw, dh) * clampScale(t ? t.scale : 1);
   const w = img.width * s;
   const h = img.height * s;
-  const x = (CARD_W - w) / 2 + (t ? t.offsetX : 0);
-  const y = (CARD_H - h) / 2 + (t ? t.offsetY : 0);
+  const x = (dw - w) / 2 + (t ? t.offsetX : 0);
+  const y = (dh - h) / 2 + (t ? t.offsetY : 0);
   ctx.drawImage(img, x, y, w, h);
 }
 
@@ -323,6 +387,8 @@ function drawBackground(ctx, img, t) {
 let lastBgImg = null; // background image currently shown in the main preview (for cursor-anchored zoom)
 
 async function renderCard(st, cnv) {
+  if (cnv.width !== CARD_W) cnv.width = CARD_W;
+  if (cnv.height !== CARD_H) cnv.height = CARD_H;
   const ctx = cnv.getContext("2d");
   ctx.clearRect(0, 0, CARD_W, CARD_H);
 
@@ -350,7 +416,7 @@ async function renderCard(st, cnv) {
 
   // 4. White text
   const WHITE = "#ffffff";
-  drawLine(ctx, st.title.trim(), ZONES.title, WHITE);
+  drawLine(ctx, st.title.trim().toUpperCase(), ZONES.title, WHITE); // protocol title always uppercase
   drawLine(ctx, st.value.trim(), ZONES.value, WHITE);
   drawPanelText(ctx, st.panelTop, ZONES.panels.top, WHITE);
   drawPanelText(ctx, st.panelMid, ZONES.panels.mid, WHITE);
@@ -367,12 +433,71 @@ async function renderCard(st, cnv) {
   }
 }
 
+/* ---------------- Compile card render (landscape) ---------------- */
+async function loadBg(st) {
+  try {
+    if (st.bg.type === "preset" && st.bg.name) return await getPresetImage(st.bg.name);
+    if (st.bg.type === "custom" && st.bg.dataUrl) return await getImageFromDataUrl(st.bg.dataUrl);
+  } catch (e) {}
+  return null;
+}
+
+// Render the compile card in landscape (1039×744) — this is what the editor shows.
+async function renderCompileLandscape(st, side, cnv) {
+  cnv.width = LAND_W; cnv.height = LAND_H;
+  const ctx = cnv.getContext("2d");
+  ctx.clearRect(0, 0, LAND_W, LAND_H);
+
+  const bgImg = await loadBg(st);
+  if (bgImg) drawBackground(ctx, bgImg, st.bg.transform, LAND_W, LAND_H);
+  else { ctx.fillStyle = "#0a0c12"; ctx.fillRect(0, 0, LAND_W, LAND_H); }
+
+  const frame = side === "back" ? assets.compileBackLand : assets.compileFrontLand;
+  if (frame) ctx.drawImage(frame, 0, 0, LAND_W, LAND_H);
+
+  const WHITE = "#ffffff";
+  const up = (s) => (s || "").trim().toUpperCase(); // compile texts are always uppercase
+  const name = up(st.title);
+  const c = st.compile || {};
+  if (side === "back") {
+    drawLine(ctx, name, COMPILE_BACK.name, WHITE);
+    drawLine(ctx, up(c.back), COMPILE_BACK.backLine, WHITE);
+  } else {
+    drawLine(ctx, up(c.top), COMPILE_FRONT.topBar, WHITE);
+    drawLine(ctx, name, COMPILE_FRONT.name, WHITE);
+    drawLine(ctx, up(c.subtitle), COMPILE_FRONT.subtitle, WHITE);
+    drawLine(ctx, up(c.bottom), COMPILE_FRONT.bottomBar, WHITE);
+  }
+
+  if (cnv === canvas) lastBgImg = bgImg; // track for cursor-anchored zoom
+
+  if (st.logo.dataUrl) {
+    try {
+      const img = await getImageFromDataUrl(st.logo.dataUrl);
+      drawLogoBox(ctx, img, st.logo.white, side === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex);
+    } catch (e) {}
+  }
+}
+
+// Render the compile card vertical (744×1039, content rotated) for print/PDF.
+async function renderCompileVertical(st, side, cnv) {
+  const land = document.createElement("canvas");
+  await renderCompileLandscape(st, side, land);
+  cnv.width = CARD_W; cnv.height = CARD_H;
+  const x = cnv.getContext("2d");
+  // rotate the landscape master 90° clockwise to fit the portrait card
+  x.translate(CARD_W, 0);
+  x.rotate(Math.PI / 2);
+  x.drawImage(land, 0, 0);
+}
+
 /* ---------------- Main preview ---------------- */
 const canvas = document.getElementById("cardCanvas");
 const renderHint = document.getElementById("renderHint");
 let renderQueued = false;
 let renderQueuedSave = false;
 let rendering = false;
+let compileSide = "front"; // which side of a compile card is being previewed/edited
 
 let saveTimer = null;
 function debouncedSave() {
@@ -385,7 +510,8 @@ async function scheduleRender(save = true) {
   if (rendering) { renderQueued = true; renderQueuedSave = renderQueuedSave || save; return; }
   rendering = true;
   try {
-    await renderCard(state, canvas);
+    if (state.kind === "compile") await renderCompileLandscape(state, compileSide, canvas);
+    else await renderCard(state, canvas);
   } catch (e) {
     console.error(e);
   }
@@ -446,13 +572,21 @@ async function loadCurrent() {
       if (raw) { s = JSON.parse(raw); localStorage.removeItem(STORE_CURRENT); }
     }
     if (s) {
-      state = Object.assign(defaultState(), s);
-      state.bg = Object.assign({ type: "none", name: null, dataUrl: null }, s.bg || {});
-      state.bg.transform = Object.assign(defaultTransform(), state.bg.transform || {});
-      migrateBg(state.bg);
-      state.logo = Object.assign({ dataUrl: null, white: true }, s.logo || {});
+      state = normalizeState(s);
     }
   } catch (e) {}
+}
+
+// Merge a loaded/imported card state with current defaults (back-compat).
+function normalizeState(s) {
+  const st = Object.assign(defaultState(), s);
+  st.bg = Object.assign({ type: "none", name: null, dataUrl: null }, s.bg || {});
+  st.bg.transform = Object.assign(defaultTransform(), st.bg.transform || {});
+  migrateBg(st.bg);
+  st.logo = Object.assign({ dataUrl: null, white: true }, s.logo || {});
+  st.kind = s.kind === "compile" ? "compile" : "protocol";
+  st.compile = Object.assign(defaultCompile(), s.compile || {});
+  return st;
 }
 
 let deck = [];
@@ -486,6 +620,11 @@ function syncFormToState() {
   state.panelMid = el("inMid").value;
   state.panelBot = el("inBot").value;
   state.logo.white = el("inLogoWhite").checked;
+  if (!state.compile) state.compile = defaultCompile();
+  state.compile.top = el("inCTop").value;
+  state.compile.subtitle = el("inCSub").value;
+  state.compile.bottom = el("inCBot").value;
+  state.compile.back = el("inCBack").value;
 }
 
 function syncStateToForm() {
@@ -495,9 +634,28 @@ function syncStateToForm() {
   el("inMid").value = state.panelMid;
   el("inBot").value = state.panelBot;
   el("inLogoWhite").checked = state.logo.white;
+  const c = state.compile || {};
+  el("inCTop").value = c.top || "";
+  el("inCSub").value = c.subtitle || "";
+  el("inCBot").value = c.bottom || "";
+  el("inCBack").value = c.back || "";
   refreshLogoUI();
   refreshBgSelection();
   syncBgAdjust();
+  applyKind();
+}
+
+// Show/hide protocol vs compile fields and update the type/side toggles.
+function applyKind() {
+  const compile = state.kind === "compile";
+  document.querySelectorAll(".protocol-only").forEach((e) => { e.hidden = compile; });
+  document.querySelectorAll(".compile-only").forEach((e) => { e.hidden = !compile; });
+  el("btnKindProtocol").classList.toggle("active", !compile);
+  el("btnKindCompile").classList.toggle("active", compile);
+  el("btnSideFront").classList.toggle("active", compileSide === "front");
+  el("btnSideBack").classList.toggle("active", compileSide === "back");
+  document.querySelectorAll(".compile-front-only").forEach((e) => { e.hidden = compileSide !== "front"; });
+  document.querySelectorAll(".compile-back-only").forEach((e) => { e.hidden = compileSide !== "back"; });
 }
 
 function refreshLogoUI() {
@@ -528,27 +686,29 @@ function syncBgAdjust() {
   el("bgZoomVal").textContent = pct + "%";
 }
 
-// card-pixels per CSS-pixel of the displayed canvas (aspect is preserved by CSS)
+// card-pixels per CSS-pixel of the displayed canvas (canvas.width tracks the
+// current orientation: 744 for protocol, 1039 for compile/landscape)
 function canvasScaleFactor() {
   const r = canvas.getBoundingClientRect();
-  return r.width ? CARD_W / r.width : 1;
+  return r.width ? canvas.width / r.width : 1;
 }
 
 // Zoom keeping the content point under (cx,cy) [card pixels] fixed.
 function zoomAt(cx, cy, factor) {
   const t = bgTransform();
   if (!lastBgImg) { t.scale = clampScale(t.scale * factor); return; }
-  const base = bgBaseScale(lastBgImg);
+  const dw = canvas.width, dh = canvas.height;
+  const base = bgBaseScale(lastBgImg, dw, dh);
   const s0 = base * t.scale;
   const w0 = lastBgImg.width * s0, h0 = lastBgImg.height * s0;
-  const tx0 = (CARD_W - w0) / 2 + t.offsetX;
-  const ty0 = (CARD_H - h0) / 2 + t.offsetY;
+  const tx0 = (dw - w0) / 2 + t.offsetX;
+  const ty0 = (dh - h0) / 2 + t.offsetY;
   const u = (cx - tx0) / s0, v = (cy - ty0) / s0; // content coordinate under cursor
   const newScale = clampScale(t.scale * factor);
   const s1 = base * newScale;
   const w1 = lastBgImg.width * s1, h1 = lastBgImg.height * s1;
-  t.offsetX = (cx - u * s1) - (CARD_W - w1) / 2;
-  t.offsetY = (cy - v * s1) - (CARD_H - h1) / 2;
+  t.offsetX = (cx - u * s1) - (dw - w1) / 2;
+  t.offsetY = (cy - v * s1) - (dh - h1) / 2;
   t.scale = newScale;
 }
 
@@ -594,10 +754,28 @@ canvas.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 /* ---------------- Bindings ---------------- */
-["inTitle", "inValue", "inTop", "inMid", "inBot"].forEach((id) => {
+["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
   el(id).addEventListener("input", () => { syncFormToState(); debouncedRender(); });
 });
 el("inLogoWhite").addEventListener("change", () => { syncFormToState(); scheduleRender(); });
+
+// Card type toggle (Protocol / Compile)
+function setKind(kind) {
+  state.kind = kind;
+  applyKind();
+  scheduleRender();
+}
+el("btnKindProtocol").addEventListener("click", () => setKind("protocol"));
+el("btnKindCompile").addEventListener("click", () => setKind("compile"));
+
+// Compile front/back toggle
+function setSide(side) {
+  compileSide = side;
+  applyKind();
+  scheduleRender();
+}
+el("btnSideFront").addEventListener("click", () => setSide("front"));
+el("btnSideBack").addEventListener("click", () => setSide("back"));
 
 // Rich-text buttons: wrap the textarea selection in **/__ markers.
 function wrapSelection(id, mark) {
@@ -727,14 +905,13 @@ function newId() {
 
 async function makeThumb(st) {
   const off = document.createElement("canvas");
-  off.width = CARD_W;
-  off.height = CARD_H;
-  await renderCard(st, off);
+  if (st.kind === "compile") await renderCompileLandscape(st, "front", off); // 1039×744 landscape
+  else { off.width = CARD_W; off.height = CARD_H; await renderCard(st, off); }
+  const tw = 240;
   const t = document.createElement("canvas");
-  t.width = 220;
-  t.height = Math.round(220 * CARD_H / CARD_W);
-  const c = t.getContext("2d");
-  c.drawImage(off, 0, 0, t.width, t.height);
+  t.width = tw;
+  t.height = Math.round(tw * off.height / off.width);
+  t.getContext("2d").drawImage(off, 0, 0, t.width, t.height);
   return t.toDataURL("image/jpeg", 0.78);
 }
 
@@ -768,6 +945,7 @@ function clearForNextCard() {
   state.panelTop = "";
   state.panelMid = "";
   state.panelBot = "";
+  state.compile = defaultCompile();
   syncStateToForm();
   scheduleRender();
 }
@@ -830,11 +1008,8 @@ function renderDeck() {
 function editCard(id) {
   const card = deck.find((d) => d.id === id);
   if (!card) return;
-  state = JSON.parse(JSON.stringify(card.state));
-  state.bg = Object.assign({ type: "none", name: null, dataUrl: null }, state.bg || {});
-  state.bg.transform = Object.assign(defaultTransform(), state.bg.transform || {});
-  migrateBg(state.bg);
-  state.logo = Object.assign({ dataUrl: null, white: true }, state.logo || {});
+  state = normalizeState(JSON.parse(JSON.stringify(card.state)));
+  compileSide = "front";
   setEditing(id);
   syncStateToForm();
   scheduleRender();
@@ -851,9 +1026,8 @@ function dupCard(id) {
 
 async function dlCard(card) {
   const off = document.createElement("canvas");
-  off.width = CARD_W;
-  off.height = CARD_H;
-  await renderCard(card.state, off);
+  if (card.state.kind === "compile") await renderCompileLandscape(card.state, "front", off);
+  else { off.width = CARD_W; off.height = CARD_H; await renderCard(card.state, off); }
   downloadCanvas(off, safeName(card.state.title) + ".png");
 }
 
@@ -893,6 +1067,12 @@ async function renderToJpeg(st) {
   off.width = CARD_W;
   off.height = CARD_H;
   await renderCard(st, off);
+  return off.toDataURL("image/jpeg", 0.92);
+}
+
+async function renderCompileVerticalJpeg(st, side) {
+  const off = document.createElement("canvas");
+  await renderCompileVertical(st, side, off);
   return off.toDataURL("image/jpeg", 0.92);
 }
 
@@ -951,17 +1131,25 @@ el("btnExportPDF").addEventListener("click", async () => {
       cropMarks(pdf, mx, my, W, H, cols, rows);
       for (let i = 0; i < chunk.length; i++) {
         btn.textContent = `${p * per + i + 1}/${deck.length}…`;
-        const url = await renderToJpeg(chunk[i].state);
+        const st = chunk[i].state;
+        const url = st.kind === "compile" ? await renderCompileVerticalJpeg(st, "front") : await renderToJpeg(st);
         pdf.addImage(url, "JPEG", mx + (i % cols) * W, my + Math.floor(i / cols) * H, W, H);
       }
       // backs: one per front only (saves ink), mirrored horizontally so they line up
       // with the fronts when printing double-sided with "flip on long edge".
+      // Protocol cards share the generic card back; compile cards use their own back face.
       pdf.addPage();
       cropMarks(pdf, mx, my, W, H, cols, rows);
       for (let i = 0; i < chunk.length; i++) {
+        const st = chunk[i].state;
         const col = cols - 1 - (i % cols); // mirror column for long-edge duplex flip
         const row = Math.floor(i / cols);
-        pdf.addImage(back, "JPEG", mx + col * W, my + row * H, W, H, "cardback");
+        if (st.kind === "compile") {
+          const burl = await renderCompileVerticalJpeg(st, "back");
+          pdf.addImage(burl, "JPEG", mx + col * W, my + row * H, W, H);
+        } else {
+          pdf.addImage(back, "JPEG", mx + col * W, my + row * H, W, H, "cardback");
+        }
       }
     }
     pdf.save("compiler-deck.pdf");
@@ -1048,14 +1236,18 @@ async function regenMissingThumbs() {
     console.warn("Fonts not loaded:", e);
   }
   try {
-    const [frame, top, mid, bot] = await Promise.all([
+    const [frame, top, mid, bot, cFront, cBack] = await Promise.all([
       loadImage("card-frame/frame.png"),
       loadImage("card-frame/panel_top.png"),
       loadImage("card-frame/panel_mid.png"),
       loadImage("card-frame/panel_bot.png"),
+      loadImage("card-frame/compile-front.png"),
+      loadImage("card-frame/compile-back.png"),
     ]);
     assets.frame = frame;
     assets.panels = { top, mid, bot };
+    assets.compileFrontLand = rotate90ccw(cFront);
+    assets.compileBackLand = rotate90ccw(cBack);
   } catch (e) {
     renderHint.textContent = "⚠ Could not load the frame assets.";
     console.error(e);
