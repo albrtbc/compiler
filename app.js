@@ -88,8 +88,59 @@ const SCALE_MIN = 0.25;
 const SCALE_MAX = 5;
 const clampScale = (s) => Math.min(SCALE_MAX, Math.max(SCALE_MIN, s || 1));
 
-let state = defaultState();
+// Logo + background are shared per card kind across the whole deck: a single
+// place holds them and every card of that kind reads from it, so editing one
+// updates all of that kind. Cards keep only their own text/value.
+const defaultBg = () => ({ type: "none", name: null, dataUrl: null, transform: defaultTransform() });
+const defaultLogo = () => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
+// title is shared across the WHOLE deck (both kinds); bg + logo are shared per kind.
+let deckShared = {
+  title: "",
+  protocol: { bg: defaultBg(), logo: defaultLogo() },
+  compile: { bg: defaultBg(), logo: defaultLogo() },
+};
+function sharedFor(kind) { return deckShared[kind === "compile" ? "compile" : "protocol"]; }
+// A render-ready copy of a card with the shared title + per-kind bg/logo merged
+// in. `st._shared` (={title,bg,logo}) overrides the global deck props — used to
+// render a foreign deck in the share gallery without touching the viewer's deck.
+function mergeShared(st) {
+  if (st._shared) return Object.assign({}, st, { title: st._shared.title, bg: st._shared.bg, logo: st._shared.logo });
+  const sh = sharedFor(st.kind);
+  return Object.assign({}, st, { title: deckShared.title, bg: sh.bg, logo: sh.logo });
+}
+
+let state = null;
 let editingId = null; // id of the deck card being edited, or null
+// state.title / state.bg / state.logo are live views of the shared props, so the
+// existing controls edit the deck-wide title and per-kind bg/logo directly.
+function setState(obj) {
+  state = obj;
+  Object.defineProperty(state, "title", {
+    enumerable: true, configurable: true,
+    get() { return deckShared.title; },
+    set(v) { deckShared.title = v; },
+  });
+  Object.defineProperty(state, "bg", {
+    enumerable: true, configurable: true,
+    get() { return sharedFor(state.kind).bg; },
+    set(v) { sharedFor(state.kind).bg = v; },
+  });
+  Object.defineProperty(state, "logo", {
+    enumerable: true, configurable: true,
+    get() { return sharedFor(state.kind).logo; },
+    set(v) { sharedFor(state.kind).logo = v; },
+  });
+  return state;
+}
+setState(defaultState());
+
+// A deck card snapshot keeps only its own content; the shared title/bg/logo come
+// from deckShared at render time (de-duplicated, never copied per card).
+function cardSnapshot(st) {
+  const snap = JSON.parse(JSON.stringify(st));
+  delete snap.title; delete snap.bg; delete snap.logo;
+  return snap;
+}
 
 /* ---------------- Asset loading ---------------- */
 function loadImage(src) {
@@ -405,6 +456,7 @@ function drawBackground(ctx, img, t, dw = CARD_W, dh = CARD_H) {
 let lastBgImg = null; // background image currently shown in the main preview (for cursor-anchored zoom)
 
 async function renderCard(st, cnv) {
+  st = mergeShared(st); // bg + logo come from the per-kind shared props
   if (cnv.width !== CARD_W) cnv.width = CARD_W;
   if (cnv.height !== CARD_H) cnv.height = CARD_H;
   const ctx = cnv.getContext("2d");
@@ -464,6 +516,7 @@ async function loadBg(st) {
 
 // Render the compile card in landscape (1039×744) — this is what the editor shows.
 async function renderCompileLandscape(st, side, cnv) {
+  st = mergeShared(st); // bg + logo come from the per-kind shared props
   cnv.width = LAND_W; cnv.height = LAND_H;
   const ctx = cnv.getContext("2d");
   ctx.clearRect(0, 0, LAND_W, LAND_H);
@@ -794,7 +847,7 @@ async function loadCurrent() {
       if (raw) { s = JSON.parse(raw); localStorage.removeItem(STORE_CURRENT); }
     }
     if (s) {
-      state = normalizeState(s);
+      setState(normalizeState(s));
     }
   } catch (e) {}
 }
@@ -830,6 +883,77 @@ function saveDeck() {
     console.error("saveDeck failed", e);
     alert("Could not save the deck. Your browser storage may be full or blocked.");
   });
+}
+
+/* ---------------- Shared per-kind logo + background ---------------- */
+function saveShared() { idbSet("deckShared", deckShared).catch((e) => console.warn("saveShared failed", e)); }
+function resetShared() {
+  deckShared = { title: "", protocol: { bg: defaultBg(), logo: defaultLogo() }, compile: { bg: defaultBg(), logo: defaultLogo() } };
+}
+// First non-empty title across a set of deck cards (title is deck-wide).
+function titleFromCards(cards) {
+  const c = (cards || []).find((x) => x && x.state && (x.state.title || "").trim());
+  return c ? c.state.title : "";
+}
+// Normalise an arbitrary {bg, logo} into a complete shared entry.
+function normalizeShared(src) {
+  const s = src || {};
+  const bg = Object.assign(defaultBg(), s.bg || {});
+  bg.transform = Object.assign(defaultTransform(), bg.transform || {});
+  migrateBg(bg);
+  const logo = Object.assign(defaultLogo(), s.logo || {});
+  return { bg, logo };
+}
+function setDeckShared(src) {
+  resetShared();
+  if (src && typeof src.title === "string") deckShared.title = src.title;
+  if (src && src.protocol) deckShared.protocol = normalizeShared(src.protocol);
+  if (src && src.compile) deckShared.compile = normalizeShared(src.compile);
+}
+async function loadShared() {
+  let sh = null;
+  try { sh = await idbGet("deckShared"); } catch (e) {}
+  if (sh) { setDeckShared(sh); return; }
+  // Migration: derive from existing per-card title/bg/logo (first card of each
+  // kind), falling back to the saved "current" editor card, then defaults.
+  resetShared();
+  let cur = null;
+  try { cur = await idbGet("current"); } catch (e) {}
+  deckShared.title = titleFromCards(deck) || (cur && cur.title) || "";
+  ["protocol", "compile"].forEach((kind) => {
+    const card = deck.find((c) => c && c.state && (c.state.kind === kind || (kind === "protocol" && c.state.kind !== "compile")));
+    const src = (card && card.state) || (cur && (cur.kind || "protocol") === kind ? cur : null);
+    if (src) deckShared[kind] = normalizeShared(src);
+  });
+  saveShared();
+}
+// Build shared props from a set of deck cards (first card of each kind) — used
+// when loading older saved/imported decks that have no shared block.
+function deriveSharedFromCards(cards) {
+  resetShared();
+  deckShared.title = titleFromCards(cards);
+  ["protocol", "compile"].forEach((kind) => {
+    const card = (cards || []).find((c) => c && c.state && (c.state.kind === kind || (kind === "protocol" && c.state.kind !== "compile")));
+    if (card && card.state) deckShared[kind] = normalizeShared(card.state);
+  });
+}
+// Re-render the cached thumbnails for the deck cards whose shared props changed
+// (kind=null → all cards, e.g. the deck-wide title) and refresh the list.
+async function refreshDeckThumbs(kind) {
+  const cards = deck.filter((c) => c && c.state && (!kind || c.state.kind === kind));
+  for (const c of cards) c.thumb = await makeThumb(c.state);
+  if (cards.length) { saveDeck(); renderDeck(); autosaveNamedDeck(); }
+}
+let sharedPropTimer = null;
+function propagateShared() {
+  clearTimeout(sharedPropTimer);
+  sharedPropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(state.kind); }, 250);
+}
+// The protocol title is deck-wide → refresh every card's thumbnail.
+let titlePropTimer = null;
+function propagateTitle() {
+  clearTimeout(titlePropTimer);
+  titlePropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(null); }, 350);
 }
 
 /* ---------------- Form ↔ state sync ---------------- */
@@ -989,6 +1113,7 @@ function attachPanZoom(cnv) {
     dragging = false; dragTarget = null; dragCanvas = null;
     cnv.classList.remove("grabbing");
     saveCurrent();
+    propagateShared(); // bg/logo moved → update the rest of this kind
   };
   cnv.addEventListener("pointerup", end);
   cnv.addEventListener("pointercancel", end);
@@ -1008,6 +1133,7 @@ function attachPanZoom(cnv) {
     }
     scheduleRender(false);
     debouncedSave();
+    propagateShared();
   }, { passive: false });
 }
 attachPanZoom(canvas);
@@ -1023,6 +1149,7 @@ function onTitleInput(srcId) {
   if (el("inTitle").value !== v) el("inTitle").value = v;
   if (el("inTitleBack").value !== v) el("inTitleBack").value = v;
   syncFormToState(); layoutOverlay(); debouncedRender();
+  propagateTitle(); // title is deck-wide → update every card
 }
 el("inTitle").addEventListener("input", () => onTitleInput("inTitle"));
 el("inTitleBack").addEventListener("input", () => onTitleInput("inTitleBack"));
@@ -1044,6 +1171,7 @@ el("inLogoZoom").addEventListener("input", () => {
   el("logoZoomVal").textContent = Math.round(state.logo.zoom * 100) + "%";
   scheduleRender(false);
   debouncedSave();
+  propagateShared();
 });
 el("btnLogoReset").addEventListener("click", () => {
   state.logo.zoom = 1;
@@ -1051,12 +1179,16 @@ el("btnLogoReset").addEventListener("click", () => {
   state.logo.offsetY = 0;
   refreshLogoUI();
   scheduleRender();
+  propagateShared();
 });
 
 // Card type toggle (Protocol / Compile)
 function setKind(kind) {
   state.kind = kind;
   applyKind();
+  refreshLogoUI();      // logo + background are per-kind shared, reflect the new kind
+  refreshBgSelection();
+  syncBgAdjust();
   scheduleRender();
 }
 el("btnKindProtocol").addEventListener("click", () => setKind("protocol"));
@@ -1113,6 +1245,7 @@ el("inLogo").addEventListener("change", (e) => {
       state.logo.dataUrl = await normalizeImage(reader.result, 320, 320, "image/png");
       refreshLogoUI();
       scheduleRender();
+      propagateShared();
     } catch (err) { alert("Could not read that image file."); }
   };
   reader.readAsDataURL(file);
@@ -1122,6 +1255,7 @@ el("btnClearLogo").addEventListener("click", () => {
   state.logo.dataUrl = null;
   refreshLogoUI();
   scheduleRender();
+  propagateShared();
 });
 // Click the logo hexagon on the card to upload/replace the logo.
 el("logoHotspot").addEventListener("click", () => el("inLogo").click());
@@ -1150,6 +1284,7 @@ el("btnNoBg").addEventListener("click", () => {
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
+  propagateShared();
 });
 
 // Zoom slider (zooms around the card centre)
@@ -1158,12 +1293,14 @@ el("inBgZoom").addEventListener("input", () => {
   el("bgZoomVal").textContent = Math.round(bgTransform().scale * 100) + "%";
   scheduleRender(false);
   debouncedSave();
+  propagateShared();
 });
 // Reset pan & zoom
 el("btnBgReset").addEventListener("click", () => {
   state.bg.transform = defaultTransform();
   syncBgAdjust();
   scheduleRender();
+  propagateShared();
 });
 
 // Background grid: uploaded customs first, then the bundled presets.
@@ -1173,6 +1310,7 @@ function selectBg(bg) {
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
+  propagateShared();
 }
 function buildBgGrid() {
   const grid = el("bgGrid");
@@ -1259,7 +1397,7 @@ async function makeThumb(st) {
 // nothing is cleared. When not editing, it adds a new card and clears for the next.
 el("btnAddDeck").addEventListener("click", async () => {
   syncFormToState();
-  const snapshot = JSON.parse(JSON.stringify(state));
+  const snapshot = cardSnapshot(state);
   const thumb = await makeThumb(snapshot);
   if (editingId) {
     const idx = deck.findIndex((d) => d.id === editingId);
@@ -1284,7 +1422,7 @@ el("btnAddDeck").addEventListener("click", async () => {
 // editing that new card — handy for building value variants quickly.
 el("btnAddAsNew").addEventListener("click", async () => {
   syncFormToState();
-  const snapshot = JSON.parse(JSON.stringify(state));
+  const snapshot = cardSnapshot(state);
   const thumb = await makeThumb(snapshot);
   const id = newId();
   deck.push({ id, state: snapshot, thumb });
@@ -1318,7 +1456,7 @@ function flashSaved() {
 
 el("btnCancelEdit").addEventListener("click", () => {
   setEditing(null);
-  state = defaultState();
+  setState(defaultState());
   syncStateToForm();
   scheduleRender();
 });
@@ -1357,7 +1495,7 @@ function renderDeck() {
     wrap.className = "deck-card";
     wrap.dataset.id = card.id;
     if (card.id === editingId) wrap.classList.add("editing");
-    const title = (card.state.title || "Untitled").trim() || "Untitled";
+    const title = (deckShared.title || "Untitled").trim() || "Untitled";
     wrap.innerHTML = `
       <button class="dc-open" title="Click to edit this card">
         <img src="${card.thumb}" alt="${title}">
@@ -1378,7 +1516,7 @@ function renderDeck() {
 function editCard(id) {
   const card = deck.find((d) => d.id === id);
   if (!card) return;
-  state = normalizeState(JSON.parse(JSON.stringify(card.state)));
+  setState(normalizeState(JSON.parse(JSON.stringify(card.state))));
   compileSide = "front";
   setEditing(id);
   syncStateToForm();
@@ -1399,7 +1537,7 @@ async function dlCard(card) {
   const off = document.createElement("canvas");
   if (card.state.kind === "compile") await renderCompileLandscape(card.state, "front", off);
   else { off.width = CARD_W; off.height = CARD_H; await renderCard(card.state, off); }
-  downloadCanvas(off, safeName(card.state.title) + ".png");
+  downloadCanvas(off, safeName(deckShared.title || card.state.value || "card") + ".png");
 }
 
 /* ---------------- Modal (confirm / prompt / share) ---------------- */
@@ -1490,9 +1628,10 @@ function renderSavedDecks() {
 function upsertSavedDeck(name) {
   currentDeckName = name;
   const cards = JSON.parse(JSON.stringify(deck));
+  const shared = JSON.parse(JSON.stringify(deckShared));
   let d = savedDecks.find((x) => x.name === name);
-  if (d) { d.cards = cards; d.updatedAt = Date.now(); currentDeckId = d.id; }
-  else { currentDeckId = newId(); savedDecks.push({ id: currentDeckId, name, cards, updatedAt: Date.now() }); }
+  if (d) { d.cards = cards; d.shared = shared; d.updatedAt = Date.now(); currentDeckId = d.id; }
+  else { currentDeckId = newId(); savedDecks.push({ id: currentDeckId, name, cards, shared, updatedAt: Date.now() }); }
   saveSavedDecks(); saveDeckMeta(); renderSavedDecks();
 }
 
@@ -1521,6 +1660,8 @@ function loadSavedDeck(id) {
   const d = savedDecks.find((x) => x.id === id);
   if (!d) return;
   deck = d.cards.map((c) => ({ id: c.id || newId(), state: normalizeState(c.state || c), thumb: c.thumb || "" }));
+  if (d.shared) setDeckShared(d.shared); else deriveSharedFromCards(deck);
+  saveShared();
   currentDeckId = id; currentDeckName = d.name; el("inDeckName").value = d.name;
   setEditing(null); saveDeck(); saveDeckMeta();
   renderDeck(); renderSavedDecks();
@@ -1554,7 +1695,9 @@ el("btnNewDeck").addEventListener("click", async () => {
     if (!ok) return;
   }
   deck = []; currentDeckId = null; currentDeckName = ""; el("inDeckName").value = "";
-  setEditing(null); saveDeck(); saveDeckMeta(); renderDeck(); renderSavedDecks();
+  resetShared(); saveShared();
+  setState(defaultState()); syncStateToForm();
+  setEditing(null); saveDeck(); saveDeckMeta(); renderDeck(); renderSavedDecks(); scheduleRender();
 });
 
 /* ---------------- Share link (compressed deck in the URL hash) ---------------- */
@@ -1584,9 +1727,22 @@ function b64urlToBytes(b64) {
   return u;
 }
 
+// Expand a shared {bg, logo} entry, resolving pooled image indexes to data URLs.
+function expandShareImgs(entry, imgs) {
+  const e = entry || {};
+  const bg = Object.assign(defaultBg(), e.bg || {});
+  bg.transform = Object.assign(defaultTransform(), bg.transform || {});
+  if (e.bg && typeof e.bg.img === "number") bg.dataUrl = imgs[e.bg.img];
+  migrateBg(bg);
+  const logo = Object.assign(defaultLogo(), e.logo || {});
+  if (e.logo && typeof e.logo.img === "number") logo.dataUrl = imgs[e.logo.img];
+  delete bg.img; delete logo.img;
+  return { bg, logo };
+}
+
 // Build a compact share payload: uploaded images are stored ONCE in a pool and
-// referenced by index (cards in a protocol usually share one bg/logo), and they're
-// re-encoded smaller so the link fits in a URL. Thumbnails/ids are dropped.
+// referenced by index (the per-kind shared logo/background dedupe naturally), and
+// they're re-encoded smaller so the link fits in a URL. Thumbnails/ids are dropped.
 async function buildSharePayload(name) {
   const imgs = [];
   const cache = new Map(); // original dataUrl -> pool index
@@ -1601,20 +1757,21 @@ async function buildSharePayload(name) {
     } catch (e) {}
     const i = imgs.length; imgs.push(small); cache.set(url, i); return i;
   }
-  const cards = [];
-  for (const c of deck) {
-    const s = c.state;
-    const card = {
-      title: s.title, value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot,
-      kind: s.kind, compile: s.compile,
-      bg: { type: s.bg.type, name: s.bg.name, transform: s.bg.transform },
-      logo: { zoom: (s.logo && s.logo.zoom) || 1, offsetX: (s.logo && s.logo.offsetX) || 0, offsetY: (s.logo && s.logo.offsetY) || 0 },
-    };
-    if (s.bg.type === "custom" && s.bg.dataUrl) card.bg.img = await ref(s.bg.dataUrl, "bg");
-    if (s.logo && s.logo.dataUrl) card.logo.img = await ref(s.logo.dataUrl, "logo");
-    cards.push(card);
+  // Per-kind shared logo + background (stored once, not per card).
+  const shared = {};
+  for (const kind of ["protocol", "compile"]) {
+    const sh = deckShared[kind];
+    const bg = { type: sh.bg.type, name: sh.bg.name, transform: sh.bg.transform };
+    if (sh.bg.type === "custom" && sh.bg.dataUrl) bg.img = await ref(sh.bg.dataUrl, "bg");
+    const logo = { zoom: sh.logo.zoom || 1, offsetX: sh.logo.offsetX || 0, offsetY: sh.logo.offsetY || 0 };
+    if (sh.logo.dataUrl) logo.img = await ref(sh.logo.dataUrl, "logo");
+    shared[kind] = { bg, logo };
   }
-  return { v: 2, name, imgs, cards };
+  const cards = deck.map((c) => {
+    const s = c.state;
+    return { value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot, kind: s.kind, compile: s.compile };
+  });
+  return { v: 3, name, title: deckShared.title, imgs, cards, shared };
 }
 
 const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
@@ -1665,6 +1822,7 @@ function sortDeckStates(states) {
 
 // On load: if the URL carries a shared deck, show it in a gallery (view or import).
 let sharedStates = null;
+let pendingShared = null; // expanded per-kind shared props of the deck being viewed
 async function checkSharedDeck() {
   const mId = location.hash.match(/[#&]d=([^&]+)/);   // short link (service-hosted)
   const m = location.hash.match(/[#&]deck=([^&]+)/);  // inline link (self-contained)
@@ -1685,20 +1843,38 @@ async function checkSharedDeck() {
     }
   } catch (e) { console.warn("Shared deck load failed:", e); el("shareView").hidden = true; alert("This shared deck could not be loaded (the link may be invalid or expired)."); return; }
   const name = (data && data.name) || "Shared deck";
-  let states;
-  if (data && data.v === 2 && Array.isArray(data.imgs)) {
-    // v2: images are deduplicated in data.imgs, referenced by index per card
+  const imgs = (data && Array.isArray(data.imgs)) ? data.imgs : [];
+  let states, expandedShared = null;
+  if (data && data.v === 3 && data.shared) {
+    // v3: deck-wide title + per-kind shared logo/background stored once.
+    expandedShared = {
+      title: data.title || data.name || "",
+      protocol: expandShareImgs(data.shared.protocol, imgs),
+      compile: expandShareImgs(data.shared.compile, imgs),
+    };
     states = (data.cards || []).map((card) => {
-      const bg = Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, card.bg || {});
-      if (card.bg && typeof card.bg.img === "number") bg.dataUrl = data.imgs[card.bg.img];
-      const logo = { dataUrl: (card.logo && typeof card.logo.img === "number") ? data.imgs[card.logo.img] : null, zoom: (card.logo && card.logo.zoom) || 1 };
-      return normalizeState(Object.assign({}, card, { bg, logo }));
+      const st = normalizeState(card);
+      const k = st.kind === "compile" ? "compile" : "protocol";
+      st._shared = { title: expandedShared.title, bg: expandedShared[k].bg, logo: expandedShared[k].logo };
+      return st;
+    });
+  } else if (data && data.v === 2 && Array.isArray(data.imgs)) {
+    // v2: images deduplicated in data.imgs, referenced per card.
+    states = (data.cards || []).map((card) => {
+      const bg = Object.assign(defaultBg(), card.bg || {});
+      if (card.bg && typeof card.bg.img === "number") bg.dataUrl = imgs[card.bg.img];
+      const logo = Object.assign(defaultLogo(), card.logo || {});
+      if (card.logo && typeof card.logo.img === "number") logo.dataUrl = imgs[card.logo.img];
+      const st = normalizeState(Object.assign({}, card, { bg, logo }));
+      st._shared = { title: st.title, bg: st.bg, logo: st.logo };
+      return st;
     });
   } else {
     const raw = Array.isArray(data) ? data : (data && data.cards) || [];
-    states = raw.map((c) => normalizeState(c.state || c));
+    states = raw.map((c) => { const st = normalizeState(c.state || c); st._shared = { title: st.title, bg: st.bg, logo: st.logo }; return st; });
   }
   if (!states.length) return;
+  pendingShared = expandedShared; // {title,protocol,compile} for v3; null for v2/legacy → import derives
   await openShareView(name, states);
 }
 
@@ -1739,7 +1915,8 @@ async function openShareView(name, states) {
     let url = "";
     try { url = await renderFrontImage(st); } catch (e) {}
     const isProtocol = st.kind === "compile";
-    const label = isProtocol ? "PROTOCOL" : (String(st.value).trim() ? "VALUE " + st.value : (st.title || "—"));
+    const stitle = (st._shared && st._shared.title) || st.title || "—";
+    const label = isProtocol ? "PROTOCOL" : (String(st.value).trim() ? "VALUE " + st.value : stitle);
     return `<div class="sg-card${isProtocol ? " sg-landscape" : ""}"><img src="${url}" alt=""><span class="sg-label">${escapeHtml(label)}</span></div>`;
   };
   const proto = [], values = [];
@@ -1758,8 +1935,14 @@ document.addEventListener("keydown", (e) => { if (!el("shareView").hidden && e.k
 el("shareImport").addEventListener("click", async () => {
   if (!sharedStates) { closeShareView(); return; }
   const states = sharedStates;
+  const adopt = pendingShared;
   const name = el("shareViewTitle").textContent || "Shared deck";
   closeShareView();
+  // Adopt the shared deck's per-kind logo/background, then drop the per-card view copies.
+  if (adopt) setDeckShared(adopt);
+  else deriveSharedFromCards(states.map((st) => ({ state: st })));
+  saveShared();
+  states.forEach((st) => { delete st._shared; });
   deck = states.map((st) => ({ id: newId(), state: st, thumb: "" }));
   currentDeckId = null; currentDeckName = name; el("inDeckName").value = name;
   setEditing(null); saveDeck(); saveDeckMeta(); renderDeck();
@@ -1769,7 +1952,7 @@ el("shareImport").addEventListener("click", async () => {
 
 async function delCard(id) {
   const card = deck.find((d) => d.id === id);
-  const name = (card && card.state.title) ? `“${card.state.title}”` : "this card";
+  const name = (deckShared.title || "").trim() ? `“${deckShared.title}”` : "this card";
   const ok = await showConfirm({ title: "Delete card?", body: `Delete ${name} from the deck? This can't be undone.` });
   if (!ok) return;
   deck = deck.filter((d) => d.id !== id);
@@ -1792,7 +1975,7 @@ el("btnDownloadAll").addEventListener("click", async () => {
     off.width = CARD_W;
     off.height = CARD_H;
     await renderCard(deck[i].state, off);
-    downloadCanvas(off, String(i + 1).padStart(2, "0") + "_" + safeName(deck[i].state.title) + ".png");
+    downloadCanvas(off, String(i + 1).padStart(2, "0") + "_" + safeName(deckShared.title || "card") + ".png");
     await new Promise((r) => setTimeout(r, 350)); // let the browser process each download
   }
   btn.textContent = original;
@@ -1903,7 +2086,7 @@ el("btnExportPDF").addEventListener("click", async () => {
 // Export / import deck JSON
 el("btnExportDeck").addEventListener("click", () => {
   if (deck.length === 0) { alert("The deck is empty."); return; }
-  const blob = new Blob([JSON.stringify({ version: 1, cards: deck }, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify({ version: 2, cards: deck, shared: deckShared }, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -1922,13 +2105,15 @@ el("btnClearDeck").addEventListener("click", async () => {
   });
   if (!ok) return;
   deck = [];
-  state = defaultState();          // blank editor; background deselected (uploads in customBgs stay)
+  resetShared();                   // clear the shared logo/background for both kinds
+  setState(defaultState());        // blank editor; background deselected (uploads in customBgs stay)
   compileSide = "front";
   currentDeckId = null;
   currentDeckName = "";
   el("inDeckName").value = "";
   setEditing(null);
   saveDeck();
+  saveShared();
   saveDeckMeta();
   syncStateToForm();               // refreshes the form + deselects bg via refreshBgSelection
   renderDeck();
@@ -1952,6 +2137,12 @@ el("inImportDeck").addEventListener("change", (e) => {
         thumb: c.thumb || "",
       }));
       deck = replace ? normalized : deck.concat(normalized);
+      // Adopt the file's shared logo/background (newer exports), else derive from cards.
+      if (replace) {
+        if (data && data.shared) setDeckShared(data.shared); else deriveSharedFromCards(deck);
+        saveShared();
+        setState(defaultState()); syncStateToForm();
+      }
       saveDeck();
       // regenerate any missing thumbnails
       regenMissingThumbs().then(renderDeck);
@@ -1982,6 +2173,7 @@ async function regenMissingThumbs() {
   if (!Array.isArray(customBgs)) customBgs = [];
   buildBgGrid();
   await loadDeck();
+  await loadShared();   // per-kind shared logo/background (migrates from old per-card data)
   await loadCurrent();
   await loadSavedDecks();
   el("inDeckName").value = currentDeckName;
