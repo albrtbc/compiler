@@ -376,6 +376,7 @@ code {
   line-height: 1;
   transition: background 0.12s, color 0.12s;
 }
+.deck-card .dc-actions button.dup { font-size: 23px; } /* the ⧉ glyph renders small */
 .deck-card .dc-actions button:last-child { border-right: none; }
 .deck-card .dc-actions button:hover { background: var(--panel-2); color: var(--text); }
 .deck-card .dc-actions button.del { color: var(--danger); }

@@ -719,10 +719,15 @@ function zoomAt(cx, cy, factor) {
   t.scale = newScale;
 }
 
-// Drag to pan
+// Background pan/zoom requires holding Ctrl (or ⌘), so normal scrolling/clicking
+// over the card is unaffected.
+const panZoomKey = (e) => e.ctrlKey || e.metaKey;
+
+// Hold Ctrl + drag to pan
 let dragging = false, lastPX = 0, lastPY = 0;
 canvas.addEventListener("pointerdown", (e) => {
-  if (state.bg.type === "none") return;
+  if (state.bg.type === "none" || !panZoomKey(e)) return;
+  e.preventDefault();
   dragging = true;
   lastPX = e.clientX; lastPY = e.clientY;
   canvas.setPointerCapture(e.pointerId);
@@ -746,9 +751,9 @@ function endDrag() {
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
 
-// Scroll to zoom (anchored at cursor)
+// Hold Ctrl + scroll to zoom (anchored at cursor); plain scroll scrolls the page
 canvas.addEventListener("wheel", (e) => {
-  if (state.bg.type === "none") return;
+  if (state.bg.type === "none" || !panZoomKey(e)) return;
   e.preventDefault();
   const r = canvas.getBoundingClientRect();
   const f = canvasScaleFactor();
@@ -1324,6 +1329,6 @@ async function regenMissingThumbs() {
     return;
   }
 
-  renderHint.textContent = "";
+  renderHint.textContent = "Tip: hold Ctrl and drag to move the background · Ctrl + scroll to zoom.";
   await scheduleRender();
 })();
