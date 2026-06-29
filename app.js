@@ -970,6 +970,8 @@ async function makeThumb(st) {
 
 // Add to deck (new card) OR save changes (while editing). Saving keeps you in
 // edit mode so you can keep tweaking without creating duplicates.
+// Save changes (while editing) updates the card in place and KEEPS editing it —
+// nothing is cleared. When not editing, it adds a new card and clears for the next.
 el("btnAddDeck").addEventListener("click", async () => {
   syncFormToState();
   const snapshot = JSON.parse(JSON.stringify(state));
@@ -981,17 +983,34 @@ el("btnAddDeck").addEventListener("click", async () => {
       deck[idx].thumb = thumb;
     }
     saveDeck();
-    setEditing(null); // deselect after saving so the next "Add to deck" creates a new card
     renderDeck();
+    autosaveNamedDeck();
     flashSaved();
   } else {
     deck.push({ id: newId(), state: snapshot, thumb });
     saveDeck();
     renderDeck();
+    autosaveNamedDeck();
+    clearForNextCard(); // reset value + panels for the next card
   }
-  autosaveNamedDeck(); // keep the saved deck in sync if it has a name
-  clearForNextCard(); // reset value + panels (keep protocol, logo, background)
 });
+
+// Add the current editor content as a NEW card (instead of overwriting), then keep
+// editing that new card — handy for building value variants quickly.
+el("btnAddAsNew").addEventListener("click", async () => {
+  syncFormToState();
+  const snapshot = JSON.parse(JSON.stringify(state));
+  const thumb = await makeThumb(snapshot);
+  const id = newId();
+  deck.push({ id, state: snapshot, thumb });
+  saveDeck();
+  setEditing(id); // continue editing the freshly added card
+  renderDeck();
+  autosaveNamedDeck();
+  const b = el("btnAddAsNew"); b.textContent = "✓ Added"; clearTimeout(addNewFlash);
+  addNewFlash = setTimeout(() => { b.textContent = "＋ Add as new"; }, 1100);
+});
+let addNewFlash = null;
 
 // Clear the per-card fields so the next card in the same protocol is quick to build.
 function clearForNextCard() {
@@ -1024,13 +1043,26 @@ function setEditing(id) {
   const editing = !!id;
   el("editStatus").hidden = !editing;
   el("btnCancelEdit").hidden = !editing;
+  el("btnAddAsNew").hidden = !editing;
   el("btnAddDeck").textContent = editing ? "💾 Save changes" : "＋ Add to deck";
   document.querySelectorAll(".deck-card").forEach((c) => {
     c.classList.toggle("editing", !!id && c.dataset.id === id);
   });
 }
 
+// Keep the working deck ordered: Protocol card (landscape) first, then by value asc.
+function sortDeck() {
+  deck.sort((a, b) => {
+    const pa = a.state.kind === "compile" ? 0 : 1;
+    const pb = b.state.kind === "compile" ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    if (pa === 0) return 0;
+    return (parseFloat(a.state.value) || 0) - (parseFloat(b.state.value) || 0);
+  });
+}
+
 function renderDeck() {
+  sortDeck();
   const list = el("deckList");
   el("deckCount").textContent = deck.length;
   el("deckEmpty").hidden = deck.length > 0;
@@ -1209,6 +1241,14 @@ function loadSavedDeck(id) {
   setEditing(null); saveDeck(); saveDeckMeta();
   renderDeck(); renderSavedDecks();
   regenMissingThumbs().then(renderDeck);
+  editProtocolCard(); // auto-select the protocol card for editing
+}
+
+// Auto-select the first card for editing. The deck is sorted (protocol card first
+// when there is one), so this picks the protocol card if present, otherwise the
+// first card — never leaving nothing selected.
+function editProtocolCard() {
+  if (deck.length) editCard(deck[0].id);
 }
 
 async function deleteSavedDeck(id) {
@@ -1359,6 +1399,10 @@ async function checkSharedDeck() {
   await openShareView(name, states);
 }
 
+// Pasting a share link while the page is already open only changes the hash
+// (no reload), so react to that too.
+window.addEventListener("hashchange", () => { if (/[#&]deck=/.test(location.hash)) checkSharedDeck(); });
+
 // Full-resolution front image (crisp when shown large in the share gallery).
 async function renderFrontImage(st) {
   const off = document.createElement("canvas");
@@ -1402,6 +1446,7 @@ el("shareImport").addEventListener("click", async () => {
   currentDeckId = null; currentDeckName = name; el("inDeckName").value = name;
   setEditing(null); saveDeck(); saveDeckMeta(); renderDeck();
   await regenMissingThumbs(); renderDeck();
+  editProtocolCard(); // auto-select the protocol card for editing
 });
 
 async function delCard(id) {
@@ -1569,6 +1614,7 @@ el("btnClearDeck").addEventListener("click", async () => {
   saveDeckMeta();
   syncStateToForm();               // refreshes the form + deselects bg via refreshBgSelection
   renderDeck();
+  renderSavedDecks();              // clear the "current" highlight on any saved deck
   scheduleRender();
 });
 
