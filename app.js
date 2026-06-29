@@ -887,6 +887,93 @@ el("btnDownloadAll").addEventListener("click", async () => {
   btn.disabled = false;
 });
 
+/* ---------------- Print & play PDF (3×3, 63×88mm) ---------------- */
+async function renderToJpeg(st) {
+  const off = document.createElement("canvas");
+  off.width = CARD_W;
+  off.height = CARD_H;
+  await renderCard(st, off);
+  return off.toDataURL("image/jpeg", 0.92);
+}
+
+let cardBackJpeg = null;
+async function getCardBackJpeg() {
+  if (cardBackJpeg) return cardBackJpeg;
+  const img = await loadImage("card-back/cardback.jpg");
+  const off = document.createElement("canvas");
+  off.width = CARD_W;
+  off.height = CARD_H;
+  const ctx = off.getContext("2d");
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  drawBackground(ctx, img, defaultTransform()); // cover-fit into the card aspect
+  cardBackJpeg = off.toDataURL("image/jpeg", 0.92);
+  return cardBackJpeg;
+}
+
+// Crop ticks in the page margins (don't mark the cards, which are edge-to-edge).
+function cropMarks(pdf, mx, my, W, H, cols, rows) {
+  pdf.setDrawColor(150);
+  pdf.setLineWidth(0.15);
+  const t = 3, gap = 1.5, gridW = W * cols, gridH = H * rows;
+  for (let c = 0; c <= cols; c++) {
+    const x = mx + c * W;
+    pdf.line(x, my - gap - t, x, my - gap);
+    pdf.line(x, my + gridH + gap, x, my + gridH + gap + t);
+  }
+  for (let r = 0; r <= rows; r++) {
+    const y = my + r * H;
+    pdf.line(mx - gap - t, y, mx - gap, y);
+    pdf.line(mx + gridW + gap, y, mx + gridW + gap + t, y);
+  }
+}
+
+el("btnExportPDF").addEventListener("click", async () => {
+  if (deck.length === 0) { alert("The deck is empty."); return; }
+  const jsPDFCtor = window.jspdf && window.jspdf.jsPDF;
+  if (!jsPDFCtor) { alert("PDF library failed to load."); return; }
+  const btn = el("btnExportPDF");
+  const original = btn.textContent;
+  btn.disabled = true;
+  try {
+    const W = 63, H = 88, cols = 3, rows = 3, per = 9;       // standard card size, 3×3 per A4 page
+    const pageW = 210, pageH = 297;
+    const mx = (pageW - W * cols) / 2, my = (pageH - H * rows) / 2;
+    const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+    const back = await getCardBackJpeg();
+    const pages = Math.ceil(deck.length / per);
+    let firstPage = true;
+    for (let p = 0; p < pages; p++) {
+      const chunk = deck.slice(p * per, p * per + per);
+      // fronts
+      if (!firstPage) pdf.addPage();
+      firstPage = false;
+      cropMarks(pdf, mx, my, W, H, cols, rows);
+      for (let i = 0; i < chunk.length; i++) {
+        btn.textContent = `${p * per + i + 1}/${deck.length}…`;
+        const url = await renderToJpeg(chunk[i].state);
+        pdf.addImage(url, "JPEG", mx + (i % cols) * W, my + Math.floor(i / cols) * H, W, H);
+      }
+      // backs: one per front only (saves ink), mirrored horizontally so they line up
+      // with the fronts when printing double-sided with "flip on long edge".
+      pdf.addPage();
+      cropMarks(pdf, mx, my, W, H, cols, rows);
+      for (let i = 0; i < chunk.length; i++) {
+        const col = cols - 1 - (i % cols); // mirror column for long-edge duplex flip
+        const row = Math.floor(i / cols);
+        pdf.addImage(back, "JPEG", mx + col * W, my + row * H, W, H, "cardback");
+      }
+    }
+    pdf.save("compiler-deck.pdf");
+  } catch (e) {
+    console.error(e);
+    alert("Could not generate the PDF: " + e.message);
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+});
+
 // Export / import deck JSON
 el("btnExportDeck").addEventListener("click", () => {
   if (deck.length === 0) { alert("The deck is empty."); return; }

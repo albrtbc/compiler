@@ -119,6 +119,7 @@
         <h2>Deck <span id="deckCount" class="count">0</span></h2>
         <div class="deck-menu">
           <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
+          <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63×88mm, with backs)">PDF</button>
           <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
           <label class="btn btn-sm btn-file">
             Import
@@ -134,6 +135,7 @@
     </aside>
   </main>
 
+  <script src="vendor/jspdf.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

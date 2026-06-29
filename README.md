@@ -23,7 +23,9 @@ Cards are composed from a fixed frame, optional text panels, a background, a lar
   - **Save / Cancel** while editing; after saving, the value and panels clear (protocol, logo and background are kept) so the next card in the same protocol is quick to build.
   - **Clear all**, plus **Export** / **Import** the whole deck as a portable `.json`.
   - Stored locally in **IndexedDB** (handles many cards with custom images).
-- **Export** — download a single card or the whole deck as PNGs.
+- **Export** — download a single card, all cards as PNGs, or a **print & play PDF**.
+  - The PDF lays out cards **3×3 per A4 page** at standard card size (63 × 88 mm), with
+    crop marks and a card-back page after each fronts page for double-sided printing.
 - Uploaded images are automatically downscaled & recompressed so they stay light.
 
 ## Run locally
@@ -49,6 +51,8 @@ index.html              · UI
 styles.css              · styles (dark theme)
 app.js                  · canvas render engine + deck logic
 card-frame/             · frame.png + panel_top/mid/bot.png
+card-back/              · cardback.jpg (used for the print & play PDF)
 fonts/                  · TT-Supermolot-Regular/Bold.ttf, Hacked-KerX.ttf
 card-backgrounds/       · 15 preset backgrounds (+ thumbs/ for the picker)
+vendor/                 · jspdf.umd.min.js (PDF generation, MIT)
 ```
