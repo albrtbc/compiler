@@ -17,7 +17,7 @@ const CARD_H = 1039;
 const ZONES = {
   title: { x: 48, y: 38, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18 },
   value: { x: 292, y: 40, w: 159, h: 175, font: "HackedKerX", max: 161, min: 28, dy: 10, dx: 7 },
-  hex:   { x: 595, y: 52, w: 104, h: 108, pad: 11 }, // contain box centred on the hexagon (~647,106)
+  hex:   { x: 583, y: 36, w: 124, h: 135, pointy: "v", flatA: 0.26, flatB: 0.85 }, // covers the frame hexagon
   panels: {
     top: { x: 80, y: 258, w: 580, h: 190 },
     mid: { x: 78, y: 508, w: 570, h: 210 },
@@ -37,13 +37,13 @@ const COMPILE_FRONT = {
   name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW },   // center ≈356
   subtitle: { x: 60, y: 418, w: 930, h: 90, font: "MotionControl", max: 62, min: 16, shadow: TEXT_SHADOW },  // center ≈463
   bottomBar:{ x: 84, y: 620, w: 928, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 },
-  hex:      { x: 867, y: 40, w: 124, h: 128, pad: 12 },   // hexagon center ≈(929,104)
+  hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
 };
 const COMPILE_BACK = {
   // name sits in the thick (left) part of the bottom bar, left-aligned at the same height as the back line
   name:     { x: 78, y: 592, w: 510, h: 128, font: "HackedKerX", max: 104, min: 24, align: "left", padX: 30 }, // center ≈656
   backLine: { x: 652, y: 626, w: 356, h: 84, font: "SupermolotR", max: 40, min: 14, align: "center", padX: 16 }, // center ≈668
-  hex:      { x: 867, y: 40, w: 124, h: 128, pad: 12 },   // hexagon center ≈(929,104)
+  hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
 };
 
 const PRESETS = [
@@ -78,7 +78,7 @@ const defaultState = () => ({
   panelBot: "",
   // type: none | preset | custom · transform pans/zooms the background
   bg: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
-  logo: { dataUrl: null, white: true },
+  logo: { dataUrl: null, zoom: 1 }, // always tinted white
   kind: "protocol", // "protocol" | "compile"
   compile: defaultCompile(),
 });
@@ -312,49 +312,51 @@ function drawPanelText(ctx, text, zone, color) {
   }
 }
 
-/* ---------------- Logo tinting ---------------- */
-function makeLogoCanvas(img, white) {
-  // contain into the hex box (minus padding so it doesn't touch the edges)
-  const box = ZONES.hex;
-  const pad = box.pad || 0;
-  const scale = Math.min((box.w - pad * 2) / img.width, (box.h - pad * 2) / img.height);
-  const w = Math.round(img.width * scale);
-  const h = Math.round(img.height * scale);
-  const off = document.createElement("canvas");
-  off.width = w;
-  off.height = h;
-  const c = off.getContext("2d");
-  c.drawImage(img, 0, 0, w, h);
-  if (white) {
-    c.globalCompositeOperation = "source-in";
-    c.fillStyle = "#ffffff";
-    c.fillRect(0, 0, w, h);
+/* ---------------- Logo (white, hexagon-clipped, zoomable) ---------------- */
+// Hexagon outline matching the frame: "v" = points top/bottom (vertical card),
+// "h" = points left/right (rotated/landscape card). Flat sides over the middle 50%.
+function hexPath(ctx, box, pointy) {
+  const { x, y, w, h } = box, cx = x + w / 2, cy = y + h / 2;
+  const a = box.flatA != null ? box.flatA : 0.25; // where the flat edge starts
+  const b = box.flatB != null ? box.flatB : 0.75; // where the flat edge ends
+  ctx.beginPath();
+  if (pointy === "h") { // points left/right, flat top & bottom edges
+    ctx.moveTo(x, cy);
+    ctx.lineTo(x + w * a, y);
+    ctx.lineTo(x + w * b, y);
+    ctx.lineTo(x + w, cy);
+    ctx.lineTo(x + w * b, y + h);
+    ctx.lineTo(x + w * a, y + h);
+  } else { // points top/bottom, flat left & right edges
+    ctx.moveTo(cx, y);
+    ctx.lineTo(x + w, y + h * a);
+    ctx.lineTo(x + w, y + h * b);
+    ctx.lineTo(cx, y + h);
+    ctx.lineTo(x, y + h * b);
+    ctx.lineTo(x, y + h * a);
   }
-  return { canvas: off, w, h };
+  ctx.closePath();
 }
 
-// Generic logo placement into an arbitrary {x,y,w,h,pad} box (used by the compile card).
-function drawLogoBox(ctx, img, white, box) {
-  const pad = box.pad || 0;
-  const scale = Math.min((box.w - pad * 2) / img.width, (box.h - pad * 2) / img.height);
-  const w = Math.max(1, Math.round(img.width * scale));
-  const h = Math.max(1, Math.round(img.height * scale));
+// Draw the logo white-tinted, cover-filling the hexagon (so it hides the frame's
+// hexagon) and clipped to the hexagon shape. `zoom` scales beyond the cover fit.
+function drawLogoHex(ctx, img, box, pointy, zoom) {
+  const z = Math.max(0.3, Math.min(4, zoom || 1));
+  const s = Math.max(box.w / img.width, box.h / img.height) * z;
+  const w = img.width * s, h = img.height * s;
   const off = document.createElement("canvas");
-  off.width = w; off.height = h;
-  const c = off.getContext("2d");
-  c.drawImage(img, 0, 0, w, h);
-  if (white) {
-    c.globalCompositeOperation = "source-in";
-    c.fillStyle = "#ffffff";
-    c.fillRect(0, 0, w, h);
-  }
-  ctx.drawImage(off, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2);
-}
-
-// Cover-fit an image into a w×h area, centred.
-function coverDraw(ctx, img, dw, dh) {
-  const s = Math.max(dw / img.width, dh / img.height);
-  ctx.drawImage(img, (dw - img.width * s) / 2, (dh - img.height * s) / 2, img.width * s, img.height * s);
+  off.width = Math.max(1, Math.round(w));
+  off.height = Math.max(1, Math.round(h));
+  const oc = off.getContext("2d");
+  oc.drawImage(img, 0, 0, off.width, off.height);
+  oc.globalCompositeOperation = "source-in";
+  oc.fillStyle = "#ffffff";
+  oc.fillRect(0, 0, off.width, off.height);
+  ctx.save();
+  hexPath(ctx, box, pointy);
+  ctx.clip();
+  ctx.drawImage(off, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
+  ctx.restore();
 }
 
 // Rotate an image 90° counter-clockwise into a new canvas (vertical frame → landscape).
@@ -422,13 +424,11 @@ async function renderCard(st, cnv) {
   drawPanelText(ctx, st.panelMid, ZONES.panels.mid, WHITE);
   drawPanelText(ctx, st.panelBot, ZONES.panels.bot, WHITE);
 
-  // 5. Logo in the hexagon
+  // 5. Logo (white, clipped to & covering the hexagon)
   if (st.logo.dataUrl) {
     try {
       const img = await getImageFromDataUrl(st.logo.dataUrl);
-      const { canvas: lc, w, h } = makeLogoCanvas(img, st.logo.white);
-      const box = ZONES.hex;
-      ctx.drawImage(lc, box.x + (box.w - w) / 2, box.y + (box.h - h) / 2, w, h);
+      drawLogoHex(ctx, img, ZONES.hex, ZONES.hex.pointy, st.logo.zoom);
     } catch (e) { /* ignore */ }
   }
 }
@@ -474,7 +474,8 @@ async function renderCompileLandscape(st, side, cnv) {
   if (st.logo.dataUrl) {
     try {
       const img = await getImageFromDataUrl(st.logo.dataUrl);
-      drawLogoBox(ctx, img, st.logo.white, side === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex);
+      const hb = side === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex;
+      drawLogoHex(ctx, img, hb, hb.pointy, st.logo.zoom);
     } catch (e) {}
   }
 }
@@ -583,7 +584,7 @@ function normalizeState(s) {
   st.bg = Object.assign({ type: "none", name: null, dataUrl: null }, s.bg || {});
   st.bg.transform = Object.assign(defaultTransform(), st.bg.transform || {});
   migrateBg(st.bg);
-  st.logo = Object.assign({ dataUrl: null, white: true }, s.logo || {});
+  st.logo = Object.assign({ dataUrl: null, zoom: 1 }, s.logo || {});
   st.kind = s.kind === "compile" ? "compile" : "protocol";
   st.compile = Object.assign(defaultCompile(), s.compile || {});
   return st;
@@ -619,7 +620,6 @@ function syncFormToState() {
   state.panelTop = el("inTop").value;
   state.panelMid = el("inMid").value;
   state.panelBot = el("inBot").value;
-  state.logo.white = el("inLogoWhite").checked;
   if (!state.compile) state.compile = defaultCompile();
   state.compile.top = el("inCTop").value;
   state.compile.subtitle = el("inCSub").value;
@@ -633,7 +633,6 @@ function syncStateToForm() {
   el("inTop").value = state.panelTop;
   el("inMid").value = state.panelMid;
   el("inBot").value = state.panelBot;
-  el("inLogoWhite").checked = state.logo.white;
   const c = state.compile || {};
   el("inCTop").value = c.top || "";
   el("inCSub").value = c.subtitle || "";
@@ -661,12 +660,20 @@ function applyKind() {
 function refreshLogoUI() {
   const has = !!state.logo.dataUrl;
   el("btnClearLogo").hidden = !has;
-  el("logoName").textContent = has ? "logo loaded" : "";
+  const prev = el("logoPreview");
+  prev.hidden = !has;
+  if (has) prev.src = state.logo.dataUrl;
+  el("logoAdjust").hidden = !has;
+  const pct = Math.round((state.logo.zoom || 1) * 100);
+  el("inLogoZoom").value = pct;
+  el("logoZoomVal").textContent = pct + "%";
 }
 
 function refreshBgSelection() {
   document.querySelectorAll(".bg-thumb").forEach((t) => {
-    t.classList.toggle("active", state.bg.type === "preset" && t.dataset.name === state.bg.name);
+    const isPreset = state.bg.type === "preset" && t.dataset.name === state.bg.name;
+    const isCustom = state.bg.type === "custom" && !!t.dataset.url && t.dataset.url === state.bg.dataUrl;
+    t.classList.toggle("active", Boolean(isPreset || isCustom)); // explicit boolean: undefined would TOGGLE
   });
 }
 
@@ -757,7 +764,18 @@ canvas.addEventListener("wheel", (e) => {
 ["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
   el(id).addEventListener("input", () => { syncFormToState(); debouncedRender(); });
 });
-el("inLogoWhite").addEventListener("change", () => { syncFormToState(); scheduleRender(); });
+// Logo zoom
+el("inLogoZoom").addEventListener("input", () => {
+  state.logo.zoom = Math.max(0.5, Math.min(3, +el("inLogoZoom").value / 100));
+  el("logoZoomVal").textContent = Math.round(state.logo.zoom * 100) + "%";
+  scheduleRender(false);
+  debouncedSave();
+});
+el("btnLogoReset").addEventListener("click", () => {
+  state.logo.zoom = 1;
+  refreshLogoUI();
+  scheduleRender();
+});
 
 // Card type toggle (Protocol / Compile)
 function setKind(kind) {
@@ -788,9 +806,14 @@ function wrapSelection(id, mark) {
   ta.setSelectionRange(inner, inner + sel.length);
   ta.dispatchEvent(new Event("input"));
 }
+// The rich-text toolbar applies to whichever panel was last focused.
+let lastPanel = "inMid";
+["inTop", "inMid", "inBot"].forEach((id) => {
+  el(id).addEventListener("focus", () => { lastPanel = id; });
+});
 document.querySelectorAll(".rt-btn").forEach((b) => {
   b.addEventListener("mousedown", (e) => e.preventDefault()); // keep textarea selection
-  b.addEventListener("click", () => wrapSelection(b.dataset.target, b.dataset.mark));
+  b.addEventListener("click", () => wrapSelection(lastPanel, b.dataset.mark));
 });
 
 // Logo upload — keep PNG to preserve transparency for white-tinting.
@@ -822,10 +845,11 @@ el("inBg").addEventListener("change", (e) => {
   reader.onload = async () => {
     try {
       const dataUrl = await normalizeImage(reader.result, 900, 1260, "image/jpeg", 0.85);
-      state.bg = { type: "custom", name: null, dataUrl, transform: defaultTransform() };
-      refreshBgSelection();
-      syncBgAdjust();
-      scheduleRender();
+      if (!customBgs.includes(dataUrl)) customBgs.unshift(dataUrl);
+      customBgs = customBgs.slice(0, 12); // keep the picker tidy
+      saveCustomBgs();
+      buildBgGrid();
+      selectBg({ type: "custom", dataUrl });
     } catch (err) { alert("Could not read that image file."); }
   };
   reader.readAsDataURL(file);
@@ -852,10 +876,38 @@ el("btnBgReset").addEventListener("click", () => {
   scheduleRender();
 });
 
-// Background preset grid
+// Background grid: uploaded customs first, then the bundled presets.
+let customBgs = [];
+function selectBg(bg) {
+  state.bg = Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, bg);
+  refreshBgSelection();
+  syncBgAdjust();
+  scheduleRender();
+}
 function buildBgGrid() {
   const grid = el("bgGrid");
   grid.innerHTML = "";
+  customBgs.forEach((url) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bg-thumb";
+    btn.dataset.url = url;
+    btn.title = "Uploaded";
+    btn.innerHTML = `<img src="${url}" alt="uploaded"><span class="bg-del" title="Remove">×</span>`;
+    btn.addEventListener("click", (e) => {
+      if (e.target.classList.contains("bg-del")) {
+        e.stopPropagation();
+        customBgs = customBgs.filter((u) => u !== url);
+        saveCustomBgs();
+        if (state.bg.type === "custom" && state.bg.dataUrl === url) selectBg({ type: "none" });
+        buildBgGrid();
+        refreshBgSelection();
+        return;
+      }
+      selectBg({ type: "custom", dataUrl: url });
+    });
+    grid.appendChild(btn);
+  });
   for (const name of PRESETS) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -863,15 +915,11 @@ function buildBgGrid() {
     btn.dataset.name = name;
     btn.title = name;
     btn.innerHTML = `<img loading="lazy" src="card-backgrounds/thumbs/${name}.jpg" alt="${name}">`;
-    btn.addEventListener("click", () => {
-      state.bg = { type: "preset", name, dataUrl: null, transform: defaultTransform() };
-      refreshBgSelection();
-      syncBgAdjust();
-      scheduleRender();
-    });
+    btn.addEventListener("click", () => selectBg({ type: "preset", name }));
     grid.appendChild(btn);
   }
 }
+function saveCustomBgs() { idbSet("customBgs", customBgs).catch(() => {}); }
 
 /* ---------------- Export ---------------- */
 function safeName(s) {
@@ -1031,10 +1079,29 @@ async function dlCard(card) {
   downloadCanvas(off, safeName(card.state.title) + ".png");
 }
 
-function delCard(id) {
+/* ---------------- Confirm modal ---------------- */
+let modalResolve = null;
+function showConfirm({ title, body, confirmLabel = "Delete" }) {
+  el("modalTitle").textContent = title;
+  el("modalBody").textContent = body;
+  el("modalConfirm").textContent = confirmLabel;
+  el("modalOverlay").hidden = false;
+  return new Promise((resolve) => { modalResolve = resolve; });
+}
+function closeModal(result) {
+  el("modalOverlay").hidden = true;
+  if (modalResolve) { modalResolve(result); modalResolve = null; }
+}
+el("modalConfirm").addEventListener("click", () => closeModal(true));
+el("modalCancel").addEventListener("click", () => closeModal(false));
+el("modalOverlay").addEventListener("click", (e) => { if (e.target === el("modalOverlay")) closeModal(false); });
+document.addEventListener("keydown", (e) => { if (!el("modalOverlay").hidden && e.key === "Escape") closeModal(false); });
+
+async function delCard(id) {
   const card = deck.find((d) => d.id === id);
   const name = (card && card.state.title) ? `“${card.state.title}”` : "this card";
-  if (!confirm(`Delete ${name} from the deck?`)) return;
+  const ok = await showConfirm({ title: "Delete card?", body: `Delete ${name} from the deck? This can't be undone.` });
+  if (!ok) return;
   deck = deck.filter((d) => d.id !== id);
   if (editingId === id) setEditing(null);
   saveDeck();
@@ -1176,9 +1243,10 @@ el("btnExportDeck").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-el("btnClearDeck").addEventListener("click", () => {
+el("btnClearDeck").addEventListener("click", async () => {
   if (deck.length === 0) { alert("The deck is already empty."); return; }
-  if (!confirm(`Delete ALL ${deck.length} cards from the deck? This cannot be undone.`)) return;
+  const ok = await showConfirm({ title: "Clear deck?", body: `Delete ALL ${deck.length} cards from the deck? This can't be undone.`, confirmLabel: "Delete all" });
+  if (!ok) return;
   deck = [];
   setEditing(null);
   saveDeck();
@@ -1224,6 +1292,8 @@ async function regenMissingThumbs() {
 
 /* ---------------- Init ---------------- */
 (async function init() {
+  try { customBgs = (await idbGet("customBgs")) || []; } catch (e) { customBgs = []; }
+  if (!Array.isArray(customBgs)) customBgs = [];
   buildBgGrid();
   await loadDeck();
   await loadCurrent();
@@ -1241,8 +1311,8 @@ async function regenMissingThumbs() {
       loadImage("card-frame/panel_top.png"),
       loadImage("card-frame/panel_mid.png"),
       loadImage("card-frame/panel_bot.png"),
-      loadImage("card-frame/compile-front.png"),
-      loadImage("card-frame/compile-back.png"),
+      loadImage("card-frame/protocol-front.png"),
+      loadImage("card-frame/protocol-back.png"),
     ]);
     assets.frame = frame;
     assets.panels = { top, mid, bot };

@@ -30,8 +30,8 @@
       </div>
 
       <div class="type-toggle">
-        <button id="btnKindProtocol" class="seg-btn active" type="button">Protocol card</button>
-        <button id="btnKindCompile" class="seg-btn" type="button">Compile card</button>
+        <button id="btnKindProtocol" class="seg-btn active" type="button">Compile card</button>
+        <button id="btnKindCompile" class="seg-btn" type="button">Protocol card</button>
       </div>
 
       <div class="field">
@@ -45,19 +45,23 @@
       </div>
 
       <div class="field">
-        <label>Protocol logo</label>
+        <label>Logo</label>
         <div class="row">
           <label class="btn btn-file">
             Upload logo
             <input id="inLogo" type="file" accept="image/*" hidden />
           </label>
           <button id="btnClearLogo" class="btn btn-ghost" type="button" hidden>Remove</button>
-          <span id="logoName" class="file-name"></span>
+          <img id="logoPreview" class="thumb-preview" alt="logo" hidden />
         </div>
-        <label class="check">
-          <input id="inLogoWhite" type="checkbox" checked />
-          Tint white
-        </label>
+        <div id="logoAdjust" class="bg-adjust" hidden>
+          <div class="row">
+            <span class="hint">Logo zoom</span>
+            <input id="inLogoZoom" type="range" min="50" max="300" value="100" />
+            <span id="logoZoomVal" class="hint">100%</span>
+            <button id="btnLogoReset" class="btn btn-ghost btn-sm" type="button">Reset</button>
+          </div>
+        </div>
       </div>
 
       <div class="field">
@@ -69,7 +73,7 @@
           </label>
           <button id="btnNoBg" class="btn btn-ghost" type="button">No background</button>
         </div>
-        <div class="hint mb">Or pick a default:</div>
+        <div class="hint mb">Pick one (your uploads appear here too):</div>
         <div id="bgGrid" class="bg-grid"></div>
         <div id="bgAdjust" class="bg-adjust" hidden>
           <div class="row">
@@ -84,36 +88,27 @@
 
       <div class="protocol-only">
         <div class="divider"><span>Text panels</span></div>
-
         <div class="field">
           <label for="inTop">Top panel</label>
-          <div class="rt-toolbar">
-            <button type="button" class="rt-btn" data-target="inTop" data-mark="**" title="Bold"><b>B</b></button>
-            <button type="button" class="rt-btn" data-target="inTop" data-mark="__" title="Underline"><u>U</u></button>
-          </div>
-          <textarea id="inTop" rows="2" placeholder="Optional text…"></textarea>
+          <textarea id="inTop" rows="3" placeholder="Optional text…"></textarea>
         </div>
         <div class="field">
           <label for="inMid">Middle panel</label>
-          <div class="rt-toolbar">
-            <button type="button" class="rt-btn" data-target="inMid" data-mark="**" title="Bold"><b>B</b></button>
-            <button type="button" class="rt-btn" data-target="inMid" data-mark="__" title="Underline"><u>U</u></button>
-          </div>
           <textarea id="inMid" rows="3" placeholder="Optional text…"></textarea>
         </div>
         <div class="field">
           <label for="inBot">Bottom panel</label>
-          <div class="rt-toolbar">
-            <button type="button" class="rt-btn" data-target="inBot" data-mark="**" title="Bold"><b>B</b></button>
-            <button type="button" class="rt-btn" data-target="inBot" data-mark="__" title="Underline"><u>U</u></button>
-          </div>
           <textarea id="inBot" rows="3" placeholder="Optional text…"></textarea>
+        </div>
+        <div class="rt-toolbar">
+          <button type="button" class="rt-btn" data-mark="**" title="Bold"><b>B</b></button>
+          <button type="button" class="rt-btn" data-mark="__" title="Underline"><u>U</u></button>
+          <span class="hint">Select text in a panel, then apply.</span>
         </div>
       </div>
 
       <div class="compile-only" hidden>
-        <div class="divider"><span>Compile card</span></div>
-        <p class="hint mb">Name, logo and background come from the Protocol fields above. Shown landscape; prints rotated.</p>
+        <div class="divider"><span>Protocol card</span></div>
         <div class="seg side-toggle">
           <button id="btnSideFront" class="seg-btn active" type="button">Front</button>
           <button id="btnSideBack" class="seg-btn" type="button">Back</button>
@@ -170,6 +165,17 @@
       <div id="deckList" class="deck-list"></div>
     </aside>
   </main>
+
+  <div id="modalOverlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 id="modalTitle">Delete card?</h3>
+      <p id="modalBody" class="modal-body"></p>
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="modalConfirm" class="btn btn-danger" type="button">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <script src="vendor/jspdf.umd.min.js"></script>
   <script src="app.js"></script>
