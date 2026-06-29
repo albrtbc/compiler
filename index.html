@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>COMPILER · Card Builder</title>
+  <meta name="description" content="Card builder / deckbuilder — create cards with a frame, panels, background, value and logo." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <h1>COMPILER</h1>
+      <span class="brand-sub">card editor</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btnExport" class="btn btn-primary" type="button">⬇ Download PNG</button>
+      <button id="btnAddDeck" class="btn" type="button">＋ Add to deck</button>
+      <button id="btnCancelEdit" class="btn btn-ghost" type="button" hidden>✕ Cancel</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ============ EDITOR ============ -->
+    <section class="panel editor" aria-label="Card editor">
+      <div id="editStatus" class="edit-status" hidden>
+        ✎ Editing a deck card — press <b>Save changes</b> to update it, or <b>Cancel</b> to discard.
+      </div>
+
+      <div class="field">
+        <label for="inTitle">Protocol <span class="hint">(title)</span></label>
+        <input id="inTitle" type="text" maxlength="40" placeholder="FIRE" autocomplete="off" />
+      </div>
+
+      <div class="field">
+        <label for="inValue">Value <span class="hint">(center number)</span></label>
+        <input id="inValue" type="text" maxlength="6" placeholder="7" autocomplete="off" inputmode="numeric" />
+      </div>
+
+      <div class="field">
+        <label>Protocol logo <span class="hint">(hexagon, in white)</span></label>
+        <div class="row">
+          <label class="btn btn-file">
+            Upload logo
+            <input id="inLogo" type="file" accept="image/*" hidden />
+          </label>
+          <button id="btnClearLogo" class="btn btn-ghost" type="button" hidden>Remove</button>
+          <span id="logoName" class="file-name"></span>
+        </div>
+        <label class="check">
+          <input id="inLogoWhite" type="checkbox" checked />
+          Tint white
+        </label>
+      </div>
+
+      <div class="field">
+        <label>Card background</label>
+        <div class="bg-tools">
+          <label class="btn btn-file">
+            Upload background
+            <input id="inBg" type="file" accept="image/*" hidden />
+          </label>
+          <button id="btnNoBg" class="btn btn-ghost" type="button">No background</button>
+        </div>
+        <div class="hint mb">Or pick a default:</div>
+        <div id="bgGrid" class="bg-grid"></div>
+        <div id="bgAdjust" class="bg-adjust" hidden>
+          <div class="row">
+            <span class="hint">Zoom</span>
+            <input id="inBgZoom" type="range" min="25" max="500" value="100" />
+            <span id="bgZoomVal" class="hint">100%</span>
+            <button id="btnBgReset" class="btn btn-ghost btn-sm" type="button">Reset</button>
+          </div>
+          <div class="hint">Drag the card to move · scroll over it to zoom.</div>
+        </div>
+      </div>
+
+      <div class="divider"><span>Text panels</span></div>
+      <p class="hint mb">If you type text, its background appears automatically. Select text and use <b>B</b>/<u>U</u>, or type <code>**bold**</code> and <code>__underline__</code>.</p>
+
+      <div class="field">
+        <label for="inTop">Top panel</label>
+        <div class="rt-toolbar">
+          <button type="button" class="rt-btn" data-target="inTop" data-mark="**" title="Bold"><b>B</b></button>
+          <button type="button" class="rt-btn" data-target="inTop" data-mark="__" title="Underline"><u>U</u></button>
+        </div>
+        <textarea id="inTop" rows="2" placeholder="Optional text…"></textarea>
+      </div>
+      <div class="field">
+        <label for="inMid">Middle panel</label>
+        <div class="rt-toolbar">
+          <button type="button" class="rt-btn" data-target="inMid" data-mark="**" title="Bold"><b>B</b></button>
+          <button type="button" class="rt-btn" data-target="inMid" data-mark="__" title="Underline"><u>U</u></button>
+        </div>
+        <textarea id="inMid" rows="3" placeholder="Optional text…"></textarea>
+      </div>
+      <div class="field">
+        <label for="inBot">Bottom panel</label>
+        <div class="rt-toolbar">
+          <button type="button" class="rt-btn" data-target="inBot" data-mark="**" title="Bold"><b>B</b></button>
+          <button type="button" class="rt-btn" data-target="inBot" data-mark="__" title="Underline"><u>U</u></button>
+        </div>
+        <textarea id="inBot" rows="3" placeholder="Optional text…"></textarea>
+      </div>
+    </section>
+
+    <!-- ============ PREVIEW ============ -->
+    <section class="panel preview" aria-label="Preview">
+      <div class="stage">
+        <canvas id="cardCanvas" width="744" height="1039" aria-label="Card"></canvas>
+      </div>
+      <p id="renderHint" class="render-hint">Loading fonts and assets…</p>
+    </section>
+
+    <!-- ============ DECK ============ -->
+    <aside class="panel deck" aria-label="Deck">
+      <div class="deck-head">
+        <h2>Deck <span id="deckCount" class="count">0</span></h2>
+        <div class="deck-menu">
+          <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
+          <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
+          <label class="btn btn-sm btn-file">
+            Import
+            <input id="inImportDeck" type="file" accept="application/json,.json" hidden />
+          </label>
+          <button id="btnClearDeck" class="btn btn-sm btn-danger" type="button">Clear all</button>
+        </div>
+      </div>
+      <div id="deckEmpty" class="deck-empty">
+        No cards yet.<br />Press <b>“Add to deck”</b> to save the current card.
+      </div>
+      <div id="deckList" class="deck-list"></div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
