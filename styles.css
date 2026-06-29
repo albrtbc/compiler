@@ -332,7 +332,7 @@ code {
   font-size: 12px;
   margin-left: 6px;
 }
-.deck-menu { display: flex; gap: 6px; flex-wrap: wrap; }
+.deck-menu { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
 .deck-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 10px; line-height: 1.6; }
 .deck-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
 .deck-card {
@@ -356,15 +356,6 @@ code {
 }
 .dc-open img { width: 100%; display: block; aspect-ratio: 744 / 1039; object-fit: contain; background: #05070c; transition: filter 0.15s; }
 .dc-open:hover img { filter: brightness(1.12); }
-.dc-open .dc-title {
-  font-size: 11px;
-  padding: 5px 7px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border-top: 1px solid var(--line);
-  font-weight: 700;
-}
 .deck-card .dc-actions { display: flex; border-top: 1px solid var(--line); }
 .deck-card .dc-actions button {
   flex: 1;

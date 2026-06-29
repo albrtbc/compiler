@@ -144,6 +144,20 @@ async function getPresetImage(name) {
   return img;
 }
 
+// Per-value art (card-frame/value_<n>.png) drawn behind the frame on normal
+// cards. Only numeric values map to a file; anything without a matching file
+// resolves to null (cached) so the card just renders without it — no error.
+const valueOverlayCache = new Map(); // value token -> Image | null
+async function getValueOverlay(value) {
+  const v = String(value == null ? "" : value).trim();
+  if (!/^[0-9]+$/.test(v)) return null;
+  if (valueOverlayCache.has(v)) return valueOverlayCache.get(v);
+  let img = null;
+  try { img = await loadImage(`card-frame/value_${v}.png`); } catch (e) { img = null; }
+  valueOverlayCache.set(v, img);
+  return img;
+}
+
 async function loadFonts() {
   const defs = [
     ["SupermolotR", "fonts/TT-Supermolot-Regular.ttf"],
@@ -412,6 +426,10 @@ async function renderCard(st, cnv) {
   if (st.panelTop.trim() && assets.panels.top) ctx.drawImage(assets.panels.top, 0, 0, CARD_W, CARD_H);
   if (st.panelMid.trim() && assets.panels.mid) ctx.drawImage(assets.panels.mid, 0, 0, CARD_W, CARD_H);
   if (st.panelBot.trim() && assets.panels.bot) ctx.drawImage(assets.panels.bot, 0, 0, CARD_W, CARD_H);
+
+  // 2b. Per-value art behind the frame (value_<n>.png; skipped silently if absent)
+  const valImg = await getValueOverlay(st.value);
+  if (valImg) ctx.drawImage(valImg, 0, 0, CARD_W, CARD_H);
 
   // 3. Frame (always, on top of panels)
   if (assets.frame) ctx.drawImage(assets.frame, 0, 0, CARD_W, CARD_H);
@@ -1076,7 +1094,6 @@ function renderDeck() {
     wrap.innerHTML = `
       <button class="dc-open" title="Click to edit this card">
         <img src="${card.thumb}" alt="${title}">
-        <div class="dc-title" title="${title}">${title}</div>
       </button>
       <div class="dc-actions">
         <button class="dup" title="Duplicate">⧉</button>
