@@ -514,11 +514,13 @@ async function renderCompileVertical(st, side, cnv) {
 
 /* ---------------- Main preview ---------------- */
 const canvas = document.getElementById("cardCanvas");
+const canvasBack = document.getElementById("cardCanvasBack"); // compile cards show front + back stacked
+const backHolder = document.getElementById("backHolder");
 const renderHint = document.getElementById("renderHint");
 let renderQueued = false;
 let renderQueuedSave = false;
 let rendering = false;
-let compileSide = "front"; // which side of a compile card is being previewed/edited
+let compileSide = "front"; // kept for thumbnails/PDF; the editor now shows both sides at once
 
 let saveTimer = null;
 function debouncedSave() {
@@ -531,11 +533,16 @@ async function scheduleRender(save = true) {
   if (rendering) { renderQueued = true; renderQueuedSave = renderQueuedSave || save; return; }
   rendering = true;
   try {
-    if (state.kind === "compile") await renderCompileLandscape(state, compileSide, canvas);
-    else await renderCard(state, canvas);
+    if (state.kind === "compile") {
+      await renderCompileLandscape(state, "front", canvas);
+      await renderCompileLandscape(state, "back", canvasBack);
+    } else {
+      await renderCard(state, canvas);
+    }
   } catch (e) {
     console.error(e);
   }
+  if (backHolder) backHolder.hidden = state.kind !== "compile";
   rendering = false;
   layoutOverlay();
   if (save) debouncedSave();
@@ -554,24 +561,26 @@ function debouncedRender() {
 // so you click on the card and type in place. We mirror the canvas's fitted
 // font size onto each field so the caret tracks the rendered glyphs.
 const cardOverlay = document.getElementById("cardOverlay");
+const cardOverlayBack = document.getElementById("cardOverlayBack");
 const measureCtx = document.createElement("canvas").getContext("2d");
-const ALL_OVERLAY_IDS = ["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot", "inCBack"];
+// Fields living in each overlay (front overlay also hosts the protocol fields).
+const FRONT_IDS = ["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot"];
+const BACK_IDS = ["inTitleBack", "inCBack"];
 
-// Which fields are live for the current kind/side, and the zone + font each maps
-// to. #inTitle is the protocol title on normal cards and the big name on compile.
-function activeOverlayFields() {
-  if (state.kind === "compile") {
-    if (compileSide === "back") return [
-      { id: "inTitle", zone: COMPILE_BACK.name, font: "HackedKerX", align: "left", upper: true },
-      { id: "inCBack", zone: COMPILE_BACK.backLine, font: "SupermolotR", align: "center", upper: true },
-    ];
-    return [
-      { id: "inCTop", zone: COMPILE_FRONT.topBar, font: "SupermolotR", align: "left", upper: true },
-      { id: "inTitle", zone: COMPILE_FRONT.name, font: "HackedKerX", align: "center", upper: true },
-      { id: "inCSub", zone: COMPILE_FRONT.subtitle, font: "MotionControl", align: "center", upper: true },
-      { id: "inCBot", zone: COMPILE_FRONT.bottomBar, font: "SupermolotR", align: "center", upper: true },
-    ];
-  }
+// Fields live for a given view mode ("protocol" | "front" | "back"), and the
+// zone + font each maps to. The protocol title and the compile front "name"
+// share #inTitle; the back "name" is #inTitleBack (kept in sync with the title).
+function overlayFieldsFor(mode) {
+  if (mode === "back") return [
+    { id: "inTitleBack", zone: COMPILE_BACK.name, font: "HackedKerX", align: "left", upper: true },
+    { id: "inCBack", zone: COMPILE_BACK.backLine, font: "SupermolotR", align: "center", upper: true },
+  ];
+  if (mode === "front") return [
+    { id: "inCTop", zone: COMPILE_FRONT.topBar, font: "SupermolotR", align: "left", upper: true },
+    { id: "inTitle", zone: COMPILE_FRONT.name, font: "HackedKerX", align: "center", upper: true },
+    { id: "inCSub", zone: COMPILE_FRONT.subtitle, font: "MotionControl", align: "center", upper: true },
+    { id: "inCBot", zone: COMPILE_FRONT.bottomBar, font: "SupermolotR", align: "center", upper: true },
+  ];
   return [
     { id: "inTitle", zone: ZONES.title, font: "HackedKerX", align: "left", upper: true },
     { id: "inValue", zone: ZONES.value, font: "HackedKerX", align: "center", upper: false },
@@ -579,6 +588,9 @@ function activeOverlayFields() {
     { id: "inMid", zone: ZONES.panels.mid, font: PANEL_FONT, align: "left", multiline: true },
     { id: "inBot", zone: ZONES.panels.bot, font: PANEL_FONT, align: "left", multiline: true },
   ];
+}
+function hexFor(mode) {
+  return mode === "back" ? COMPILE_BACK.hex : mode === "front" ? COMPILE_FRONT.hex : ZONES.hex;
 }
 
 // Font size + line count the canvas uses for a wrapped panel (mirrors drawPanelText).
@@ -649,14 +661,15 @@ function setPanelHtml(id, markers) {
   e.innerHTML = markersToHtml(markers || "");
 }
 
-function layoutOverlay() {
-  if (!cardOverlay) return;
-  const cardW = canvas.width || CARD_W;
-  const rect = canvas.getBoundingClientRect();
+// Position every field of one view (mode) over its canvas/overlay.
+function layoutOneOverlay(cnv, overlay, hotspotId, mode, ids) {
+  if (!cnv || !overlay) return;
+  const cardW = cnv.width || CARD_W;
+  const rect = cnv.getBoundingClientRect();
   const scale = rect.width ? rect.width / cardW : 0;
-  const active = activeOverlayFields();
+  const active = overlayFieldsFor(mode);
   const activeIds = new Set(active.map((f) => f.id));
-  ALL_OVERLAY_IDS.forEach((id) => { const e = el(id); if (e && !activeIds.has(id)) e.style.display = "none"; });
+  ids.forEach((id) => { const e = el(id); if (e && !activeIds.has(id)) e.style.display = "none"; });
   if (!scale) return;
   for (const f of active) {
     const e = el(f.id);
@@ -689,12 +702,10 @@ function layoutOverlay() {
       e.style.paddingTop = e.style.paddingBottom = "0px";
     }
   }
-  // Clickable logo hotspot over the hexagon (per kind/side).
-  const lh = el("logoHotspot");
+  // Clickable logo hotspot over the hexagon.
+  const lh = el(hotspotId);
   if (lh) {
-    const hz = state.kind === "compile"
-      ? (compileSide === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex)
-      : ZONES.hex;
+    const hz = hexFor(mode);
     lh.style.display = "flex";
     lh.style.left = hz.x * scale + "px";
     lh.style.top = hz.y * scale + "px";
@@ -705,22 +716,36 @@ function layoutOverlay() {
   }
 }
 
+function layoutOverlay() {
+  if (!cardOverlay) return;
+  if (state.kind === "compile") {
+    layoutOneOverlay(canvas, cardOverlay, "logoHotspot", "front", FRONT_IDS);
+    layoutOneOverlay(canvasBack, cardOverlayBack, "logoHotspotBack", "back", BACK_IDS);
+  } else {
+    layoutOneOverlay(canvas, cardOverlay, "logoHotspot", "protocol", FRONT_IDS);
+    BACK_IDS.forEach((id) => { const e = el(id); if (e) e.style.display = "none"; });
+    const lhb = el("logoHotspotBack"); if (lhb) lhb.style.display = "none";
+  }
+}
+
 if (cardOverlay && typeof ResizeObserver !== "undefined") {
-  new ResizeObserver(() => layoutOverlay()).observe(canvas);
+  const ro = new ResizeObserver(() => layoutOverlay());
+  ro.observe(canvas);
+  if (canvasBack) ro.observe(canvasBack);
 }
 // While Shift is held, let pointer events fall through the text fields and the
 // logo hotspot to the canvas so pan/zoom works over any zone.
 function syncOverlayPanning(e) {
   const on = !!e.shiftKey;
-  if (cardOverlay) cardOverlay.classList.toggle("panning", on);
-  // grab cursor only while Shift is held and there's something to move
-  canvas.classList.toggle("shift-grab", on && (state.bg.type !== "none" || !!state.logo.dataUrl));
+  const movable = on && (state.bg.type !== "none" || !!state.logo.dataUrl);
+  [cardOverlay, cardOverlayBack].forEach((o) => o && o.classList.toggle("panning", on));
+  [canvas, canvasBack].forEach((c) => c && c.classList.toggle("shift-grab", movable));
 }
 window.addEventListener("keydown", syncOverlayPanning);
 window.addEventListener("keyup", syncOverlayPanning);
 window.addEventListener("blur", () => {
-  if (cardOverlay) cardOverlay.classList.remove("panning");
-  canvas.classList.remove("shift-grab");
+  [cardOverlay, cardOverlayBack].forEach((o) => o && o.classList.remove("panning"));
+  [canvas, canvasBack].forEach((c) => c && c.classList.remove("shift-grab"));
 });
 
 /* ---------------- IndexedDB key-value store ----------------
@@ -825,6 +850,7 @@ function syncFormToState() {
 
 function syncStateToForm() {
   el("inTitle").value = state.title;
+  el("inTitleBack").value = state.title;
   el("inValue").value = state.value;
   setPanelHtml("inTop", state.panelTop);
   setPanelHtml("inMid", state.panelMid);
@@ -847,10 +873,6 @@ function applyKind() {
   document.querySelectorAll(".compile-only").forEach((e) => { e.hidden = !compile; });
   el("btnKindProtocol").classList.toggle("active", !compile);
   el("btnKindCompile").classList.toggle("active", compile);
-  el("btnSideFront").classList.toggle("active", compileSide === "front");
-  el("btnSideBack").classList.toggle("active", compileSide === "back");
-  document.querySelectorAll(".compile-front-only").forEach((e) => { e.hidden = compileSide !== "front"; });
-  document.querySelectorAll(".compile-back-only").forEach((e) => { e.hidden = compileSide !== "back"; });
 }
 
 function refreshLogoUI() {
@@ -888,18 +910,17 @@ function syncBgAdjust() {
   el("bgZoomVal").textContent = pct + "%";
 }
 
-// card-pixels per CSS-pixel of the displayed canvas (canvas.width tracks the
-// current orientation: 744 for protocol, 1039 for compile/landscape)
-function canvasScaleFactor() {
-  const r = canvas.getBoundingClientRect();
-  return r.width ? canvas.width / r.width : 1;
+// card-pixels per CSS-pixel of a displayed canvas
+function scaleFactor(cnv) {
+  const r = cnv.getBoundingClientRect();
+  return r.width ? cnv.width / r.width : 1;
 }
 
-// Zoom keeping the content point under (cx,cy) [card pixels] fixed.
-function zoomAt(cx, cy, factor) {
+// Zoom keeping the content point under (cx,cy) [card pixels] fixed, on canvas cnv.
+function zoomAtOn(cnv, cx, cy, factor) {
   const t = bgTransform();
   if (!lastBgImg) { t.scale = clampScale(t.scale * factor); return; }
-  const dw = canvas.width, dh = canvas.height;
+  const dw = cnv.width, dh = cnv.height;
   const base = bgBaseScale(lastBgImg, dw, dh);
   const s0 = base * t.scale;
   const w0 = lastBgImg.width * s0, h0 = lastBgImg.height * s0;
@@ -918,85 +939,93 @@ function zoomAt(cx, cy, factor) {
 // so normal scrolling/clicking over the card is unaffected.
 const panZoomKey = (e) => e.shiftKey;
 
-// The hexagon zone for the current kind/side — used to route drag/zoom to the
-// logo when the cursor is over it.
-function activeHexZone() {
-  return state.kind === "compile"
-    ? (compileSide === "back" ? COMPILE_BACK.hex : COMPILE_FRONT.hex)
-    : ZONES.hex;
+// Hexagon zone for a given canvas (back canvas → compile back hex).
+function hexForCanvas(cnv) {
+  if (cnv === canvasBack) return COMPILE_BACK.hex;
+  return state.kind === "compile" ? COMPILE_FRONT.hex : ZONES.hex;
 }
-function cardPoint(e) {
-  const r = canvas.getBoundingClientRect();
-  const f = canvasScaleFactor();
+function pointOn(cnv, e) {
+  const r = cnv.getBoundingClientRect(), f = scaleFactor(cnv);
   return { x: (e.clientX - r.left) * f, y: (e.clientY - r.top) * f };
 }
-function overLogo(e) {
+function overLogoOn(cnv, e) {
   if (!state.logo.dataUrl) return false;
-  const h = activeHexZone(), p = cardPoint(e);
+  const h = hexForCanvas(cnv), p = pointOn(cnv, e);
   return p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h;
 }
 function clampLogoZoom(z) { return Math.max(0.5, Math.min(3, z)); }
 
-// Hold Shift + drag to pan the background (or the logo, if the cursor is on it)
-let dragging = false, dragTarget = null, lastPX = 0, lastPY = 0;
-canvas.addEventListener("pointerdown", (e) => {
-  if (!panZoomKey(e)) return;
-  const onLogo = overLogo(e);
-  if (!onLogo && state.bg.type === "none") return; // nothing to drag
-  e.preventDefault();
-  dragging = true;
-  dragTarget = onLogo ? "logo" : "bg";
-  lastPX = e.clientX; lastPY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
-  canvas.classList.add("grabbing");
-});
-canvas.addEventListener("pointermove", (e) => {
-  if (!dragging) return;
-  const f = canvasScaleFactor();
-  const dx = (e.clientX - lastPX) * f, dy = (e.clientY - lastPY) * f;
-  if (dragTarget === "logo") {
-    state.logo.offsetX = (state.logo.offsetX || 0) + dx;
-    state.logo.offsetY = (state.logo.offsetY || 0) + dy;
-  } else {
-    const t = bgTransform();
-    t.offsetX += dx; t.offsetY += dy;
-  }
-  lastPX = e.clientX; lastPY = e.clientY;
-  scheduleRender(false);
-});
-function endDrag() {
-  if (!dragging) return;
-  dragging = false;
-  dragTarget = null;
-  canvas.classList.remove("grabbing");
-  saveCurrent();
+// Hold Shift + drag to pan (logo if hovered, else background); Shift + scroll to
+// zoom the same target. Wired on both the front and back canvases.
+let dragging = false, dragTarget = null, dragCanvas = null, lastPX = 0, lastPY = 0;
+function attachPanZoom(cnv) {
+  if (!cnv) return;
+  cnv.addEventListener("pointerdown", (e) => {
+    if (!panZoomKey(e)) return;
+    const onLogo = overLogoOn(cnv, e);
+    if (!onLogo && state.bg.type === "none") return; // nothing to drag
+    e.preventDefault();
+    dragging = true; dragTarget = onLogo ? "logo" : "bg"; dragCanvas = cnv;
+    lastPX = e.clientX; lastPY = e.clientY;
+    cnv.setPointerCapture(e.pointerId);
+    cnv.classList.add("grabbing");
+  });
+  cnv.addEventListener("pointermove", (e) => {
+    if (!dragging || dragCanvas !== cnv) return;
+    const f = scaleFactor(cnv);
+    const dx = (e.clientX - lastPX) * f, dy = (e.clientY - lastPY) * f;
+    if (dragTarget === "logo") {
+      state.logo.offsetX = (state.logo.offsetX || 0) + dx;
+      state.logo.offsetY = (state.logo.offsetY || 0) + dy;
+    } else {
+      const t = bgTransform();
+      t.offsetX += dx; t.offsetY += dy;
+    }
+    lastPX = e.clientX; lastPY = e.clientY;
+    scheduleRender(false);
+  });
+  const end = () => {
+    if (!dragging || dragCanvas !== cnv) return;
+    dragging = false; dragTarget = null; dragCanvas = null;
+    cnv.classList.remove("grabbing");
+    saveCurrent();
+  };
+  cnv.addEventListener("pointerup", end);
+  cnv.addEventListener("pointercancel", end);
+  cnv.addEventListener("wheel", (e) => {
+    if (!panZoomKey(e)) return;
+    const onLogo = overLogoOn(cnv, e);
+    if (!onLogo && state.bg.type === "none") return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    if (onLogo) {
+      state.logo.zoom = clampLogoZoom((state.logo.zoom || 1) * factor);
+      refreshLogoUI();
+    } else {
+      const p = pointOn(cnv, e);
+      zoomAtOn(cnv, p.x, p.y, factor);
+      syncBgAdjust();
+    }
+    scheduleRender(false);
+    debouncedSave();
+  }, { passive: false });
 }
-canvas.addEventListener("pointerup", endDrag);
-canvas.addEventListener("pointercancel", endDrag);
-
-// Hold Shift + scroll to zoom (the logo if hovered, else the background)
-canvas.addEventListener("wheel", (e) => {
-  if (!panZoomKey(e)) return;
-  const onLogo = overLogo(e);
-  if (!onLogo && state.bg.type === "none") return;
-  e.preventDefault();
-  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-  if (onLogo) {
-    state.logo.zoom = clampLogoZoom((state.logo.zoom || 1) * factor);
-    refreshLogoUI();
-  } else {
-    const p = cardPoint(e);
-    zoomAt(p.x, p.y, factor);
-    syncBgAdjust();
-  }
-  scheduleRender(false);
-  debouncedSave();
-}, { passive: false });
+attachPanZoom(canvas);
+attachPanZoom(canvasBack);
 
 /* ---------------- Bindings ---------------- */
-["inTitle", "inValue", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
+["inValue", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
   el(id).addEventListener("input", () => { syncFormToState(); layoutOverlay(); debouncedRender(); });
 });
+// The protocol title / compile name appears on both faces — keep the two fields synced.
+function onTitleInput(srcId) {
+  const v = el(srcId).value;
+  if (el("inTitle").value !== v) el("inTitle").value = v;
+  if (el("inTitleBack").value !== v) el("inTitleBack").value = v;
+  syncFormToState(); layoutOverlay(); debouncedRender();
+}
+el("inTitle").addEventListener("input", () => onTitleInput("inTitle"));
+el("inTitleBack").addEventListener("input", () => onTitleInput("inTitleBack"));
 // Panels are contenteditable: keep them as **/__ markers in state, and restore
 // the placeholder when emptied (browsers leave a stray <br> behind).
 PANEL_IDS.forEach((id) => {
@@ -1033,27 +1062,44 @@ function setKind(kind) {
 el("btnKindProtocol").addEventListener("click", () => setKind("protocol"));
 el("btnKindCompile").addEventListener("click", () => setKind("compile"));
 
-// Compile front/back toggle
-function setSide(side) {
-  compileSide = side;
-  applyKind();
-  scheduleRender();
-}
-el("btnSideFront").addEventListener("click", () => setSide("front"));
-el("btnSideBack").addEventListener("click", () => setSide("back"));
-
-// The rich-text toolbar applies bold/underline to whichever panel was last focused.
+// Floating formatting toolbar that pops up above a text selection in a panel.
+const selToolbar = el("selToolbar");
 let lastPanel = "inMid";
 PANEL_IDS.forEach((id) => {
   el(id).addEventListener("focus", () => { lastPanel = id; });
 });
-document.querySelectorAll(".rt-btn").forEach((b) => {
+// The panel element (inTop/inMid/inBot) the current selection lives in, or null.
+function panelOfSelection() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  let node = sel.anchorNode;
+  while (node && node !== document.body) {
+    if (node.nodeType === 1 && PANEL_IDS.includes(node.id)) return node;
+    node = node.parentNode;
+  }
+  return null;
+}
+function updateSelToolbar() {
+  if (!selToolbar) return;
+  const panel = panelOfSelection();
+  if (!panel) { selToolbar.hidden = true; return; }
+  lastPanel = panel.id;
+  const rect = window.getSelection().getRangeAt(0).getBoundingClientRect();
+  if (!rect.width && !rect.height) { selToolbar.hidden = true; return; }
+  selToolbar.hidden = false;
+  selToolbar.style.left = rect.left + rect.width / 2 + "px";
+  selToolbar.style.top = rect.top - 8 + "px";
+}
+document.addEventListener("selectionchange", updateSelToolbar);
+document.addEventListener("scroll", () => { if (selToolbar && !selToolbar.hidden) updateSelToolbar(); }, true);
+if (selToolbar) selToolbar.querySelectorAll(".rt-btn").forEach((b) => {
   b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the panel selection
   b.addEventListener("click", () => {
     const e = el(lastPanel);
     e.focus();
     document.execCommand(b.dataset.mark === "**" ? "bold" : "underline");
     e.dispatchEvent(new Event("input"));
+    updateSelToolbar();
   });
 });
 
@@ -1079,6 +1125,7 @@ el("btnClearLogo").addEventListener("click", () => {
 });
 // Click the logo hexagon on the card to upload/replace the logo.
 el("logoHotspot").addEventListener("click", () => el("inLogo").click());
+el("logoHotspotBack").addEventListener("click", () => el("inLogo").click());
 
 // Background upload — recompress to JPEG sized for the card.
 el("inBg").addEventListener("change", (e) => {

@@ -149,6 +149,21 @@ input[type="text"]:focus, textarea:focus {
   transition: background 0.12s, border-color 0.12s;
 }
 .rt-btn:hover { background: #232c3e; border-color: var(--accent-2); }
+/* floating formatting toolbar that pops up above a panel text selection */
+.sel-toolbar {
+  position: fixed;
+  z-index: 120;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -100%); /* centred above the anchor point */
+}
+.sel-toolbar[hidden] { display: none; }
+.sel-toolbar .rt-btn { width: 32px; height: 30px; }
 code {
   background: var(--bg);
   border: 1px solid var(--line);
@@ -278,14 +293,16 @@ code {
 .stage {
   width: 100%;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
   background:
     repeating-conic-gradient(#10141d 0% 25%, #0b0e15 0% 50%) 50% / 22px 22px;
   border-radius: 10px;
   padding: 16px;
   border: 1px solid var(--line);
 }
-#cardCanvas {
+.card-canvas {
   width: auto;
   height: auto;
   max-width: 100%;
@@ -295,8 +312,9 @@ code {
   display: block;
   touch-action: none;
 }
-#cardCanvas.shift-grab { cursor: grab; } /* only while Shift is held (pan/zoom mode) */
-#cardCanvas.grabbing { cursor: grabbing; }
+.card-holder[hidden] { display: none; }
+.card-canvas.shift-grab { cursor: grab; } /* only while Shift is held (pan/zoom mode) */
+.card-canvas.grabbing { cursor: grabbing; }
 .render-hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; min-height: 14px; }
 
 /* ---- In-card editable text overlay ---- */

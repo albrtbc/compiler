@@ -91,34 +91,17 @@
             <span id="bgZoomVal" class="hint">100%</span>
             <button id="btnBgReset" class="btn btn-ghost btn-sm" type="button">Reset</button>
           </div>
-          <div class="hint">Hold <b>Shift</b> and drag to move · <b>Shift</b> + scroll to zoom. Over the logo it moves/zooms the logo.</div>
         </div>
       </div>
 
-      <div class="protocol-only">
-        <div class="divider"><span>Panel formatting</span></div>
-        <div class="rt-toolbar">
-          <button type="button" class="rt-btn" data-mark="**" title="Bold"><b>B</b></button>
-          <button type="button" class="rt-btn" data-mark="__" title="Underline"><u>U</u></button>
-          <span class="hint">Select text in a panel on the card, then apply.</span>
-        </div>
-      </div>
-
-      <div class="compile-only" hidden>
-        <div class="divider"><span>Card side</span></div>
-        <div class="seg side-toggle">
-          <button id="btnSideFront" class="seg-btn active" type="button">Front</button>
-          <button id="btnSideBack" class="seg-btn" type="button">Back</button>
-        </div>
-        <p class="hint">Edit the top, name, subtitle and bottom lines directly on the card.</p>
-      </div>
     </section>
 
     <!-- ============ PREVIEW ============ -->
     <section class="panel preview" aria-label="Preview">
       <div class="stage">
+        <!-- Front (also the only card for the vertical "Compile card" kind) -->
         <div class="card-holder">
-          <canvas id="cardCanvas" width="744" height="1039" aria-label="Card"></canvas>
+          <canvas id="cardCanvas" class="card-canvas" width="744" height="1039" aria-label="Card front"></canvas>
           <!-- Editable text sits directly over the card; the canvas renders the real styling. -->
           <div id="cardOverlay" class="card-overlay">
             <input id="inTitle" class="ovl" type="text" maxlength="40" placeholder="PROTOCOL" autocomplete="off" spellcheck="false" />
@@ -129,8 +112,19 @@
             <input id="inCTop" class="ovl" type="text" maxlength="60" placeholder="&gt; TOP LINE" autocomplete="off" spellcheck="false" />
             <input id="inCSub" class="ovl" type="text" maxlength="40" placeholder="SUBTITLE" autocomplete="off" spellcheck="false" />
             <input id="inCBot" class="ovl" type="text" maxlength="60" placeholder="BOTTOM LINE" autocomplete="off" spellcheck="false" />
-            <input id="inCBack" class="ovl" type="text" maxlength="60" placeholder="BACK LINE" autocomplete="off" spellcheck="false" />
             <button id="logoHotspot" class="ovl-logo" type="button" title="Click to upload a logo">
+              <span class="ovl-logo-ico">＋</span>
+              <span class="ovl-logo-txt">Logo</span>
+            </button>
+          </div>
+        </div>
+        <!-- Back of the landscape "Protocol card" — shown stacked below the front -->
+        <div class="card-holder" id="backHolder" hidden>
+          <canvas id="cardCanvasBack" class="card-canvas" width="1039" height="744" aria-label="Card back"></canvas>
+          <div id="cardOverlayBack" class="card-overlay">
+            <input id="inTitleBack" class="ovl" type="text" maxlength="40" placeholder="PROTOCOL" autocomplete="off" spellcheck="false" />
+            <input id="inCBack" class="ovl" type="text" maxlength="60" placeholder="BACK LINE" autocomplete="off" spellcheck="false" />
+            <button id="logoHotspotBack" class="ovl-logo" type="button" title="Click to upload a logo">
               <span class="ovl-logo-ico">＋</span>
               <span class="ovl-logo-txt">Logo</span>
             </button>
@@ -204,6 +198,12 @@
         <button id="modalConfirm" class="btn btn-danger" type="button">Delete</button>
       </div>
     </div>
+  </div>
+
+  <!-- Floating formatting toolbar shown above a text selection inside a panel -->
+  <div id="selToolbar" class="sel-toolbar" hidden>
+    <button type="button" class="rt-btn" data-mark="**" title="Bold"><b>B</b></button>
+    <button type="button" class="rt-btn" data-mark="__" title="Underline"><u>U</u></button>
   </div>
 
   <script src="vendor/jspdf.umd.min.js"></script>
