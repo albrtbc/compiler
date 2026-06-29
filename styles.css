@@ -299,6 +299,49 @@ code {
 #cardCanvas.grabbing { cursor: grabbing; }
 .render-hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; min-height: 14px; }
 
+/* ---- In-card editable text overlay ---- */
+.card-holder { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.card-overlay { position: absolute; inset: 0; pointer-events: none; }
+.card-overlay .ovl {
+  position: absolute;
+  display: none; /* shown + positioned per card kind/side by layoutOverlay() */
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent; /* keep typed text invisible (canvas shows it) */
+  caret-color: var(--accent);
+  pointer-events: auto;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  line-height: 1;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+.card-overlay .ovl-multiline { white-space: pre-wrap; overflow-wrap: anywhere; }
+.card-overlay.panning .ovl { pointer-events: none; } /* let Ctrl+drag/scroll pan the background */
+/* contenteditable panels: placeholder + match canvas glyph widths (bold uses the bold face) */
+.card-overlay .ovl[contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(255, 255, 255, 0.34);
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.34);
+  pointer-events: none;
+}
+.card-overlay .ovl-multiline b,
+.card-overlay .ovl-multiline strong,
+.card-overlay .ovl-multiline [style*="font-weight"] { font-weight: normal; font-family: SupermolotB; }
+.card-overlay .ovl-multiline u,
+.card-overlay .ovl-multiline ins { text-decoration: none; }
+.card-overlay .ovl::placeholder { color: rgba(255, 255, 255, 0.34); -webkit-text-fill-color: rgba(255, 255, 255, 0.34); }
+.card-overlay .ovl::selection { background: rgba(65, 224, 208, 0.35); }
+.card-overlay .ovl:hover { background: rgba(65, 224, 208, 0.08); box-shadow: inset 0 0 0 1px rgba(65, 224, 208, 0.4); cursor: text; }
+.card-overlay .ovl:focus { background: rgba(65, 224, 208, 0.12); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.edit-tip { color: var(--muted); font-size: 12px; margin: 0 0 14px; padding: 8px 10px; background: var(--panel-2); border: 1px dashed var(--line-2); border-radius: 8px; }
+
 /* ===== Background adjust (pan/zoom) ===== */
 .bg-adjust { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
 .bg-adjust .row { gap: 8px; }

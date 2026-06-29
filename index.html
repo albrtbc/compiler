@@ -51,10 +51,7 @@
         <button id="btnKindCompile" class="seg-btn" type="button">Protocol card</button>
       </div>
 
-      <div class="field">
-        <label for="inTitle">Protocol</label>
-        <input id="inTitle" type="text" maxlength="40" placeholder="FIRE" autocomplete="off" />
-      </div>
+      <p class="edit-tip">✎ Click any text on the card to edit it directly.</p>
 
       <div class="field">
         <label>Logo</label>
@@ -99,63 +96,42 @@
       </div>
 
       <div class="protocol-only">
-        <div class="divider"><span>Value &amp; text</span></div>
-        <div class="field">
-          <label for="inValue">Value</label>
-          <input id="inValue" type="text" maxlength="6" placeholder="7" autocomplete="off" inputmode="numeric" />
-        </div>
-        <div class="field">
-          <label for="inTop">Top panel</label>
-          <textarea id="inTop" rows="3" placeholder="Optional text…"></textarea>
-        </div>
-        <div class="field">
-          <label for="inMid">Middle panel</label>
-          <textarea id="inMid" rows="3" placeholder="Optional text…"></textarea>
-        </div>
-        <div class="field">
-          <label for="inBot">Bottom panel</label>
-          <textarea id="inBot" rows="3" placeholder="Optional text…"></textarea>
-        </div>
+        <div class="divider"><span>Panel formatting</span></div>
         <div class="rt-toolbar">
           <button type="button" class="rt-btn" data-mark="**" title="Bold"><b>B</b></button>
           <button type="button" class="rt-btn" data-mark="__" title="Underline"><u>U</u></button>
-          <span class="hint">Select text in a panel, then apply.</span>
+          <span class="hint">Select text in a panel on the card, then apply.</span>
         </div>
       </div>
 
       <div class="compile-only" hidden>
-        <div class="divider"><span>Protocol card</span></div>
+        <div class="divider"><span>Card side</span></div>
         <div class="seg side-toggle">
           <button id="btnSideFront" class="seg-btn active" type="button">Front</button>
           <button id="btnSideBack" class="seg-btn" type="button">Back</button>
         </div>
-        <div class="compile-front-only">
-          <div class="field">
-            <label for="inCTop">Top line</label>
-            <input id="inCTop" type="text" maxlength="60" placeholder="&gt; WASH AND RENEW" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="inCSub">Subtitle</label>
-            <input id="inCSub" type="text" maxlength="40" placeholder="LOADING…" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="inCBot">Bottom line</label>
-            <input id="inCBot" type="text" maxlength="60" placeholder="RETURN, DRAW, FLIP" autocomplete="off" />
-          </div>
-        </div>
-        <div class="compile-back-only" hidden>
-          <div class="field">
-            <label for="inCBack">Back line</label>
-            <input id="inCBack" type="text" maxlength="60" placeholder="COMPILED" autocomplete="off" />
-          </div>
-        </div>
+        <p class="hint">Edit the top, name, subtitle and bottom lines directly on the card.</p>
       </div>
     </section>
 
     <!-- ============ PREVIEW ============ -->
     <section class="panel preview" aria-label="Preview">
       <div class="stage">
-        <canvas id="cardCanvas" width="744" height="1039" aria-label="Card"></canvas>
+        <div class="card-holder">
+          <canvas id="cardCanvas" width="744" height="1039" aria-label="Card"></canvas>
+          <!-- Editable text sits directly over the card; the canvas renders the real styling. -->
+          <div id="cardOverlay" class="card-overlay">
+            <input id="inTitle" class="ovl" type="text" maxlength="40" placeholder="PROTOCOL" autocomplete="off" spellcheck="false" />
+            <input id="inValue" class="ovl" type="text" maxlength="6" placeholder="0" autocomplete="off" inputmode="numeric" spellcheck="false" />
+            <div id="inTop" class="ovl ovl-multiline" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Top panel…" spellcheck="false"></div>
+            <div id="inMid" class="ovl ovl-multiline" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Middle panel…" spellcheck="false"></div>
+            <div id="inBot" class="ovl ovl-multiline" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Bottom panel…" spellcheck="false"></div>
+            <input id="inCTop" class="ovl" type="text" maxlength="60" placeholder="&gt; TOP LINE" autocomplete="off" spellcheck="false" />
+            <input id="inCSub" class="ovl" type="text" maxlength="40" placeholder="SUBTITLE" autocomplete="off" spellcheck="false" />
+            <input id="inCBot" class="ovl" type="text" maxlength="60" placeholder="BOTTOM LINE" autocomplete="off" spellcheck="false" />
+            <input id="inCBack" class="ovl" type="text" maxlength="60" placeholder="BACK LINE" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
       </div>
       <p id="renderHint" class="render-hint">Loading fonts and assets…</p>
     </section>

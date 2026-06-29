@@ -21,7 +21,7 @@ const ZONES = {
   panels: {
     top: { x: 80, y: 258, w: 580, h: 190 },
     mid: { x: 78, y: 508, w: 570, h: 210 },
-    bot: { x: 78, y: 798, w: 585, h: 182 },
+    bot: { x: 78, y: 766, w: 585, h: 214 },
   },
 };
 const PANEL_FONT = "SupermolotR";
@@ -36,7 +36,7 @@ const COMPILE_FRONT = {
   topBar:   { x: 72, y: 40, w: 700, h: 80, font: "SupermolotR", max: 36, min: 14, align: "left", padX: 26 },
   name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW },   // center ≈356
   subtitle: { x: 60, y: 418, w: 930, h: 90, font: "MotionControl", max: 62, min: 16, shadow: TEXT_SHADOW },  // center ≈463
-  bottomBar:{ x: 84, y: 620, w: 928, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 },
+  bottomBar:{ x: 60, y: 620, w: 930, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 }, // centred on the card like name/subtitle
   hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
 };
 const COMPILE_BACK = {
@@ -301,7 +301,7 @@ function drawPanelText(ctx, text, zone, color) {
   const lh = size * LINE_FACTOR;
   const ulThick = Math.max(1, size * 0.06);
   const spaceW = wrapped.spaceW;
-  let y = zone.y + Math.max(0, (zone.h - wrapped.lines.length * lh) / 2);
+  let y = zone.y + Math.max(0, (zone.h - wrapped.lines.length * lh) / 2); // vertically centred
   for (const line of wrapped.lines) {
     let x = zone.x;
     const ulY = y + size * 0.92;
@@ -535,6 +535,7 @@ async function scheduleRender(save = true) {
     console.error(e);
   }
   rendering = false;
+  layoutOverlay();
   if (save) debouncedSave();
   if (renderQueued) { renderQueued = false; const s = renderQueuedSave; renderQueuedSave = false; scheduleRender(s); }
 }
@@ -544,6 +545,161 @@ function debouncedRender() {
   clearTimeout(debTimer);
   debTimer = setTimeout(scheduleRender, 90);
 }
+
+/* ---------------- In-card editable text overlay ---------------- */
+// Editable inputs sit on top of the canvas, one per text zone. Their text is
+// transparent (the canvas draws the real, styled text) but the caret is shown,
+// so you click on the card and type in place. We mirror the canvas's fitted
+// font size onto each field so the caret tracks the rendered glyphs.
+const cardOverlay = document.getElementById("cardOverlay");
+const measureCtx = document.createElement("canvas").getContext("2d");
+const ALL_OVERLAY_IDS = ["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot", "inCBack"];
+
+// Which fields are live for the current kind/side, and the zone + font each maps
+// to. #inTitle is the protocol title on normal cards and the big name on compile.
+function activeOverlayFields() {
+  if (state.kind === "compile") {
+    if (compileSide === "back") return [
+      { id: "inTitle", zone: COMPILE_BACK.name, font: "HackedKerX", align: "left", upper: true },
+      { id: "inCBack", zone: COMPILE_BACK.backLine, font: "SupermolotR", align: "center", upper: true },
+    ];
+    return [
+      { id: "inCTop", zone: COMPILE_FRONT.topBar, font: "SupermolotR", align: "left", upper: true },
+      { id: "inTitle", zone: COMPILE_FRONT.name, font: "HackedKerX", align: "center", upper: true },
+      { id: "inCSub", zone: COMPILE_FRONT.subtitle, font: "MotionControl", align: "center", upper: true },
+      { id: "inCBot", zone: COMPILE_FRONT.bottomBar, font: "SupermolotR", align: "center", upper: true },
+    ];
+  }
+  return [
+    { id: "inTitle", zone: ZONES.title, font: "HackedKerX", align: "left", upper: true },
+    { id: "inValue", zone: ZONES.value, font: "HackedKerX", align: "center", upper: false },
+    { id: "inTop", zone: ZONES.panels.top, font: PANEL_FONT, align: "left", multiline: true },
+    { id: "inMid", zone: ZONES.panels.mid, font: PANEL_FONT, align: "left", multiline: true },
+    { id: "inBot", zone: ZONES.panels.bot, font: PANEL_FONT, align: "left", multiline: true },
+  ];
+}
+
+// Font size + line count the canvas uses for a wrapped panel (mirrors drawPanelText).
+function panelFitSize(text, zone) {
+  const t = (text || "").replace(/\s+$/g, "");
+  if (!t.trim()) return { size: PANEL_MAX, lines: 1 };
+  const paras = richParagraphs(t);
+  let size = PANEL_MAX, wrapped = null;
+  for (; size >= PANEL_MIN; size--) {
+    wrapped = wrapRich(measureCtx, paras, size, zone.w);
+    if (wrapped.lines.length * size * LINE_FACTOR <= zone.h) break;
+  }
+  return { size, lines: wrapped ? Math.max(1, wrapped.lines.length) : 1 };
+}
+
+// Panels are edited in a contenteditable that shows real (transparent) bold/
+// underline instead of the literal ** and __ markers, so the caret tracks the
+// rendered glyphs. We convert between the marker string (state/canvas/share)
+// and HTML on the way in/out.
+const PANEL_IDS = ["inTop", "inMid", "inBot"];
+function escapeHtmlText(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function markersToHtml(str) {
+  return (str || "").split("\n").map((line) =>
+    parseRich(line).map((r) => {
+      let h = escapeHtmlText(r.text);
+      if (r.underline) h = `<u>${h}</u>`;
+      if (r.bold) h = `<b>${h}</b>`;
+      return h;
+    }).join("")
+  ).join("<br>");
+}
+function htmlToMarkers(root) {
+  let out = "", curB = false, curU = false;
+  const close = () => { if (curB) { out += "**"; curB = false; } if (curU) { out += "__"; curU = false; } };
+  const emit = (text, b, u) => {
+    if (!text) return;
+    if (b !== curB) { out += "**"; curB = b; }
+    if (u !== curU) { out += "__"; curU = u; }
+    out += text;
+  };
+  const walk = (node, b, u) => {
+    node.childNodes.forEach((ch) => {
+      if (ch.nodeType === 3) {
+        ch.nodeValue.split("\n").forEach((part, i) => { if (i) { close(); out += "\n"; } emit(part, b, u); });
+        return;
+      }
+      if (ch.nodeType !== 1) return;
+      const tag = ch.tagName.toLowerCase();
+      if (tag === "br") { close(); out += "\n"; return; }
+      let nb = b, nu = u;
+      if (tag === "b" || tag === "strong") nb = true;
+      if (tag === "u" || tag === "ins") nu = true;
+      const stl = (ch.getAttribute && ch.getAttribute("style")) || "";
+      if (/font-weight\s*:\s*(bold|[6-9]00)/i.test(stl)) nb = true;
+      if (/text-decoration[^;]*underline/i.test(stl)) nu = true;
+      if ((tag === "div" || tag === "p") && out && !out.endsWith("\n")) { close(); out += "\n"; }
+      walk(ch, nb, nu);
+    });
+  };
+  walk(root, false, false);
+  close();
+  return out.replace(/\n+$/, "");
+}
+// Refresh a panel's HTML from its marker string, unless the user is editing it.
+function setPanelHtml(id, markers) {
+  const e = el(id);
+  if (!e || document.activeElement === e) return;
+  e.innerHTML = markersToHtml(markers || "");
+}
+
+function layoutOverlay() {
+  if (!cardOverlay) return;
+  const cardW = canvas.width || CARD_W;
+  const rect = canvas.getBoundingClientRect();
+  const scale = rect.width ? rect.width / cardW : 0;
+  const active = activeOverlayFields();
+  const activeIds = new Set(active.map((f) => f.id));
+  ALL_OVERLAY_IDS.forEach((id) => { const e = el(id); if (e && !activeIds.has(id)) e.style.display = "none"; });
+  if (!scale) return;
+  for (const f of active) {
+    const e = el(f.id);
+    if (!e) continue;
+    const z = f.zone, padX = z.padX || 0;
+    e.style.display = "block";
+    e.style.left = z.x * scale + "px";
+    e.style.top = z.y * scale + "px";
+    e.style.width = z.w * scale + "px";
+    e.style.height = z.h * scale + "px";
+    e.style.fontFamily = f.font;
+    e.style.textAlign = f.align;
+    e.style.textTransform = f.upper ? "uppercase" : "none";
+    e.style.paddingLeft = e.style.paddingRight = padX * scale + "px";
+    const raw = (e.value || "").trim();
+    const hint = raw || e.placeholder || "";
+    if (f.multiline) {
+      const markers = htmlToMarkers(e);
+      const { size, lines } = panelFitSize(markers || e.dataset.placeholder || "", z);
+      const lh = size * LINE_FACTOR * scale;
+      e.style.fontSize = size * scale + "px";
+      e.style.lineHeight = lh + "px";
+      e.style.paddingTop = Math.max(0, (z.h * scale - lines * lh) / 2) + "px"; // vertically centred, matches drawPanelText
+      e.style.paddingBottom = "0px";
+    } else {
+      const disp = f.upper ? hint.toUpperCase() : hint;
+      const size = fitSingleLine(measureCtx, disp, f.font, z.w - padX * 2, z.h, z.max, z.min);
+      e.style.fontSize = size * scale + "px";
+      e.style.lineHeight = z.h * scale + "px"; // vertically centre the single line
+      e.style.paddingTop = e.style.paddingBottom = "0px";
+    }
+  }
+}
+
+if (cardOverlay && typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(() => layoutOverlay()).observe(canvas);
+}
+// While Ctrl/⌘ is held, let pointer events fall through the text fields to the
+// canvas so background pan/zoom works even over a text zone.
+function syncOverlayPanning(e) {
+  if (cardOverlay) cardOverlay.classList.toggle("panning", !!(e.ctrlKey || e.metaKey));
+}
+window.addEventListener("keydown", syncOverlayPanning);
+window.addEventListener("keyup", syncOverlayPanning);
+window.addEventListener("blur", () => cardOverlay && cardOverlay.classList.remove("panning"));
 
 /* ---------------- IndexedDB key-value store ----------------
    localStorage caps at ~5MB, which a few cards with custom images blow past.
@@ -635,9 +791,9 @@ const el = (id) => document.getElementById(id);
 function syncFormToState() {
   state.title = el("inTitle").value;
   state.value = el("inValue").value;
-  state.panelTop = el("inTop").value;
-  state.panelMid = el("inMid").value;
-  state.panelBot = el("inBot").value;
+  state.panelTop = htmlToMarkers(el("inTop"));
+  state.panelMid = htmlToMarkers(el("inMid"));
+  state.panelBot = htmlToMarkers(el("inBot"));
   if (!state.compile) state.compile = defaultCompile();
   state.compile.top = el("inCTop").value;
   state.compile.subtitle = el("inCSub").value;
@@ -648,9 +804,9 @@ function syncFormToState() {
 function syncStateToForm() {
   el("inTitle").value = state.title;
   el("inValue").value = state.value;
-  el("inTop").value = state.panelTop;
-  el("inMid").value = state.panelMid;
-  el("inBot").value = state.panelBot;
+  setPanelHtml("inTop", state.panelTop);
+  setPanelHtml("inMid", state.panelMid);
+  setPanelHtml("inBot", state.panelBot);
   const c = state.compile || {};
   el("inCTop").value = c.top || "";
   el("inCSub").value = c.subtitle || "";
@@ -784,8 +940,20 @@ canvas.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 /* ---------------- Bindings ---------------- */
-["inTitle", "inValue", "inTop", "inMid", "inBot", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
-  el(id).addEventListener("input", () => { syncFormToState(); debouncedRender(); });
+["inTitle", "inValue", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
+  el(id).addEventListener("input", () => { syncFormToState(); layoutOverlay(); debouncedRender(); });
+});
+// Panels are contenteditable: keep them as **/__ markers in state, and restore
+// the placeholder when emptied (browsers leave a stray <br> behind).
+PANEL_IDS.forEach((id) => {
+  const e = el(id);
+  e.addEventListener("input", () => {
+    if (!e.textContent.trim() && e.innerHTML) e.innerHTML = "";
+    syncFormToState(); layoutOverlay(); debouncedRender();
+  });
+  e.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); document.execCommand("insertLineBreak"); }
+  });
 });
 // Logo zoom
 el("inLogoZoom").addEventListener("input", () => {
@@ -818,25 +986,19 @@ function setSide(side) {
 el("btnSideFront").addEventListener("click", () => setSide("front"));
 el("btnSideBack").addEventListener("click", () => setSide("back"));
 
-// Rich-text buttons: wrap the textarea selection in **/__ markers.
-function wrapSelection(id, mark) {
-  const ta = el(id);
-  const s = ta.selectionStart, e = ta.selectionEnd, v = ta.value;
-  const sel = v.slice(s, e);
-  ta.value = v.slice(0, s) + mark + sel + mark + v.slice(e);
-  const inner = s + mark.length;
-  ta.focus();
-  ta.setSelectionRange(inner, inner + sel.length);
-  ta.dispatchEvent(new Event("input"));
-}
-// The rich-text toolbar applies to whichever panel was last focused.
+// The rich-text toolbar applies bold/underline to whichever panel was last focused.
 let lastPanel = "inMid";
-["inTop", "inMid", "inBot"].forEach((id) => {
+PANEL_IDS.forEach((id) => {
   el(id).addEventListener("focus", () => { lastPanel = id; });
 });
 document.querySelectorAll(".rt-btn").forEach((b) => {
-  b.addEventListener("mousedown", (e) => e.preventDefault()); // keep textarea selection
-  b.addEventListener("click", () => wrapSelection(lastPanel, b.dataset.mark));
+  b.addEventListener("mousedown", (e) => e.preventDefault()); // keep the panel selection
+  b.addEventListener("click", () => {
+    const e = el(lastPanel);
+    e.focus();
+    document.execCommand(b.dataset.mark === "**" ? "bold" : "underline");
+    e.dispatchEvent(new Event("input"));
+  });
 });
 
 // Logo upload — keep PNG to preserve transparency for white-tinting.
