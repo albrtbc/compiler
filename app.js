@@ -119,7 +119,7 @@ async function getImageFromDataUrl(dataUrl) {
 
 async function getPresetImage(name) {
   if (presetCache.has(name)) return presetCache.get(name);
-  const img = await loadImage(`card-backgrounds/${name}.png`);
+  const img = await loadImage(`card-backgrounds/${name}.jpg`);
   presetCache.set(name, img);
   return img;
 }
