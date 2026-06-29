@@ -975,6 +975,6 @@ async function regenMissingThumbs() {
     return;
   }
 
-  renderHint.textContent = "Ready · edit the fields and the card updates instantly.";
+  renderHint.textContent = "";
   await scheduleRender();
 })();
