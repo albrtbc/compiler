@@ -1594,10 +1594,22 @@ function saveDeckMeta() { idbSet("currentDeckMeta", { id: currentDeckId, name: c
 
 // The background used by a deck (first card that has one) for its row thumbnail.
 function deckBgSrc(d) {
-  for (const c of d.cards || []) {
-    const bg = c.state && c.state.bg;
+  const fromBg = (bg) => {
     if (bg && bg.type === "preset" && bg.name) return `card-backgrounds/thumbs/${bg.name}.jpg`;
     if (bg && bg.type === "custom" && bg.dataUrl) return bg.dataUrl;
+    return null;
+  };
+  // New model: background lives in the per-kind shared block.
+  if (d.shared) {
+    for (const kind of ["compile", "protocol"]) {
+      const src = d.shared[kind] && fromBg(d.shared[kind].bg);
+      if (src) return src;
+    }
+  }
+  // Old model: per-card background.
+  for (const c of d.cards || []) {
+    const src = fromBg(c.state && c.state.bg);
+    if (src) return src;
   }
   return null;
 }
