@@ -849,8 +849,28 @@ async function scheduleRender(save = true) {
   else hidePreviewLoading(); // the (heavy) render that prompted the spinner has finished
 }
 const stageEl = document.querySelector(".stage");
-function showPreviewLoading() { if (stageEl) stageEl.classList.add("loading"); }
-function hidePreviewLoading() { if (stageEl) stageEl.classList.remove("loading"); }
+let previewLoadTimer = null, previewShownAt = 0, bulkLoading = false;
+// Per-render spinner: delayed-show so a fast cached render never flashes it.
+function showPreviewLoading() {
+  clearTimeout(previewLoadTimer);
+  previewLoadTimer = setTimeout(() => { if (stageEl) { stageEl.classList.add("loading"); previewShownAt = performance.now(); } }, 130);
+}
+function hidePreviewLoading() {
+  if (bulkLoading) return; // a deck-load owns the overlay; it clears it itself
+  clearTimeout(previewLoadTimer);
+  if (stageEl) stageEl.classList.remove("loading");
+}
+// Bulk load (opening a deck, startup, import): show the overlay immediately and
+// keep it up for a clearly-visible minimum, regardless of how fast the work is.
+async function withDeckLoading(fn) {
+  bulkLoading = true;
+  if (stageEl) { stageEl.classList.add("loading"); previewShownAt = performance.now(); }
+  try { return await fn(); }
+  finally {
+    const wait = Math.max(0, 480 - (performance.now() - previewShownAt));
+    setTimeout(() => { bulkLoading = false; if (stageEl) stageEl.classList.remove("loading"); }, wait);
+  }
+}
 
 let debTimer = null;
 function debouncedRender() {
@@ -1400,6 +1420,7 @@ function syncStateToForm() {
   el("inCBack").value = c.back || "";
   el("inCode").value = deckShared.code || "";
   el("inCustomBg").checked = !!deckShared.perCardBg;
+  refreshBgModeLabel();
   el("inGlitchPreset").value = String(deckShared.glitchPreset || 0);
   el("inGlitchPreset").dispatchEvent(new Event("cselect-sync")); // refresh the custom dropdown label
   refreshLogoUI();
@@ -1763,12 +1784,22 @@ el("inCustomBg").addEventListener("change", () => {
   commitCurrentCard();   // persist the editor card under the new mode
   saveShared();
   refreshBgSideToggle();
+  refreshBgModeLabel();
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
   markDirty();
   refreshDeckThumbs(null); // re-render every thumbnail for the new mode
 });
+
+// A mosaic split is really "one image, a different crop per card" (not a separate
+// image per card), so relabel the toggle when a split is active to make that clear.
+function refreshBgModeLabel() {
+  const t = document.querySelector(".switch .switch-text");
+  if (!t) return;
+  const split = !!(deckShared.split && deckShared.split.dataUrl);
+  t.textContent = split ? "Single image · split across cards" : "Different background per card";
+}
 
 // Deck-wide set code, edited in-place on the card (vertical "Compile card" only).
 el("inCode").addEventListener("input", () => {
@@ -2045,6 +2076,7 @@ function applyMosaic() {
   saveShared(); saveDeck(); markDirty();
   closeMosaic();
   el("inCustomBg").checked = true;
+  refreshBgModeLabel();
   // reload the edited card so it picks up its cell (if it's a value card); don't create one
   if (editingId && deck.some((d) => d.id === editingId)) { const card = deck.find((d) => d.id === editingId); setState(normalizeState(JSON.parse(JSON.stringify(card.state)))); syncStateToForm(); scheduleRender(); }
   renderDeck();
@@ -2499,16 +2531,18 @@ async function doSaveChanges() {
 function loadSavedDeck(id) {
   const d = savedDecks.find((x) => x.id === id);
   if (!d) return;
-  deck = d.cards.map((c) => ({ id: c.id || newId(), state: normalizeState(c.state || c), thumb: c.thumb || "" }));
-  if (d.shared) setDeckShared(d.shared); else deriveSharedFromCards(deck);
-  saveShared();
-  currentDeckId = id; currentDeckName = d.name; el("inDeckName").value = d.name;
-  deckDirty = false; // freshly loaded → matches its saved copy
-  captureRevertBaseline();
-  setEditing(null); saveDeck(); saveDeckMeta();
-  renderDeck(); renderSavedDecks();
-  regenMissingThumbs().then(renderDeck);
-  editProtocolCard(); // auto-select the protocol card for editing
+  withDeckLoading(async () => {
+    deck = d.cards.map((c) => ({ id: c.id || newId(), state: normalizeState(c.state || c), thumb: c.thumb || "" }));
+    if (d.shared) setDeckShared(d.shared); else deriveSharedFromCards(deck);
+    saveShared();
+    currentDeckId = id; currentDeckName = d.name; el("inDeckName").value = d.name;
+    deckDirty = false; // freshly loaded → matches its saved copy
+    captureRevertBaseline();
+    setEditing(null); saveDeck(); saveDeckMeta();
+    renderDeck(); renderSavedDecks();
+    await regenMissingThumbs(); renderDeck();
+    await editProtocolCard(); // auto-select the protocol card for editing
+  });
 }
 
 // Auto-select the first card for editing. The deck is sorted (protocol card first
@@ -3099,24 +3133,25 @@ el("inImportDeck").addEventListener("change", (e) => {
       const cards = Array.isArray(data) ? data : data.cards;
       if (!Array.isArray(cards)) throw new Error("Invalid format");
       const replace = deck.length === 0 || confirm("Replace the current deck? (Cancel = append to the end)");
-      const normalized = cards.map((c) => ({
-        id: newId(),
-        state: Object.assign(defaultState(), c.state || c),
-        thumb: c.thumb || "",
-      }));
-      deck = replace ? normalized : deck.concat(normalized);
-      // Adopt the file's shared logo/background (newer exports), else derive from cards.
-      if (replace) {
-        if (data && data.shared) setDeckShared(data.shared); else deriveSharedFromCards(deck);
-        saveShared();
-        setState(defaultState()); syncStateToForm();
-      }
-      saveDeck();
-      markDirty(); // imported deck isn't in "My decks" yet → offer to save it
-      captureRevertBaseline(); // the imported deck is the baseline Cancel reverts to
-      // regenerate any missing thumbnails
-      regenMissingThumbs().then(renderDeck);
-      renderDeck();
+      withDeckLoading(async () => {
+        const normalized = cards.map((c) => ({
+          id: newId(),
+          state: Object.assign(defaultState(), c.state || c),
+          thumb: c.thumb || "",
+        }));
+        deck = replace ? normalized : deck.concat(normalized);
+        // Adopt the file's shared logo/background (newer exports), else derive from cards.
+        if (replace) {
+          if (data && data.shared) setDeckShared(data.shared); else deriveSharedFromCards(deck);
+          saveShared();
+          setState(defaultState()); syncStateToForm();
+        }
+        saveDeck();
+        markDirty(); // imported deck isn't in "My decks" yet → offer to save it
+        captureRevertBaseline(); // the imported deck is the baseline Cancel reverts to
+        renderDeck();
+        await regenMissingThumbs(); renderDeck();
+      });
     } catch (err) {
       alert("Could not import the deck: " + err.message);
     }
@@ -3140,7 +3175,9 @@ async function regenMissingThumbs() {
 (async function init() {
   // If the URL carries a shared deck, cover the page with a loading state right away
   // so the editor doesn't flash before the gallery appears.
-  if (/[#&](deck|d)=/.test(location.hash)) showShareLoading();
+  const sharedUrl = /[#&](deck|d)=/.test(location.hash);
+  if (sharedUrl) showShareLoading();
+  else if (stageEl) { bulkLoading = true; stageEl.classList.add("loading"); previewShownAt = performance.now(); } // startup spinner over the editor
   try {
     const raw = (await idbGet("customBgs")) || [];
     customBgs = [];
@@ -3190,9 +3227,12 @@ async function regenMissingThumbs() {
   await scheduleRender();
   // The deck always has a current card to edit (creating a blank one if empty),
   // unless the URL carries a shared deck (handled by the gallery below).
-  if (!/[#&](deck|d)=/.test(location.hash)) {
+  if (!sharedUrl) {
     await editProtocolCard();
     captureRevertBaseline(); // baseline = the startup deck (incl. any auto-created card)
+    // Clear the startup spinner (kept up for a clearly-visible minimum).
+    const wait = Math.max(0, 480 - (performance.now() - previewShownAt));
+    setTimeout(() => { bulkLoading = false; if (stageEl) stageEl.classList.remove("loading"); }, wait);
   }
   await checkSharedDeck(); // import a deck if the URL carries one
 })();
