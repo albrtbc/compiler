@@ -419,7 +419,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
   transition: background 0.12s, box-shadow 0.12s;
 }
 .card-overlay .ovl-multiline { white-space: pre-wrap; overflow-wrap: anywhere; }
-.card-overlay .ovl-code { text-align: center; text-transform: uppercase; transform-origin: center; } /* rotated set code; transform set by layoutOverlay */
+.card-overlay .ovl-code { text-align: right; text-transform: uppercase; } /* rotated set code; transform + origin set by layoutCodeField */
 .card-overlay.panning .ovl,
 .card-overlay.panning .ovl-logo { pointer-events: none; } /* let Ctrl+drag/scroll pan the background */
 /* clickable logo hotspot over the hexagon */

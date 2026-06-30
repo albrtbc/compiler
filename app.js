@@ -869,25 +869,28 @@ const BACK_IDS = ["inTitleBack", "inCBack"];
 // match drawSideCode; len/thick are the (pre-rotation) box the input occupies.
 // Only on the vertical "Compile card" (kind="protocol"); not on the landscape card.
 const CODE_ZONE = {
-  // Matches drawSideCode (x:695, y:475, size:24, letterSpacing:5, condense:1.72):
-  // band center ≈ (694, 558). len/letterSpacing are PRE-scaleX (the transform
-  // stretches the run by `condense`), so the caret tracks the rendered glyphs.
-  protocol: { cx: 694, cy: 558, len: 95, thick: 34, size: 24, font: "SupermolotB", letterSpacing: 5, condense: 1.72 },
+  // Mirrors drawSideCode's anchor (x:695, y:475) + style, so the input/caret track
+  // the glyphs at ANY length. `len` is just the clickable run length; the rest match
+  // drawSideCode (letterSpacing/condense are pre-scaleX — the transform stretches).
+  protocol: { x: 695, y: 475, len: 180, thick: 34, size: 24, font: "SupermolotB", letterSpacing: 5, condense: 1.72 },
 };
 function layoutCodeField(inputId, z, scale) {
   const e = el(inputId);
   if (!e) return;
   const w = z.len * scale, h = z.thick * scale;
+  const ax = z.x * scale, ay = z.y * scale; // anchor = drawSideCode's (x,y): the run's fixed TOP end
   e.style.display = "block";
   e.style.width = w + "px";
   e.style.height = h + "px";
-  e.style.left = (z.cx * scale - w / 2) + "px";
-  e.style.top = (z.cy * scale - h / 2) + "px";
-  // Match drawSideCode exactly so the (invisible) text + caret line up with the
-  // rendered glyphs: rotate, stretch the run by `condense` (scaleX), and apply the
-  // same letter-spacing. Without these the caret ignores the spacing/stretch.
+  e.style.left = (ax - w) + "px";        // box extends left of the anchor → "down" once rotated
+  e.style.top = (ay - h / 2) + "px";
+  e.style.transformOrigin = "100% 50%";  // rotate/scale about the anchored (right-edge) end
+  // Mirror drawSideCode (topAnchor + textAlign right): pin the top end and grow
+  // down with the same letter-spacing + condense, so the caret tracks the glyphs
+  // for ANY number of letters — not just the 5 the box used to be sized for.
   const cond = z.condense || 1;
   e.style.transform = "rotate(-90deg)" + (cond !== 1 ? " scaleX(" + cond + ")" : "");
+  e.style.textAlign = "right";
   e.style.fontFamily = z.font;
   e.style.fontSize = z.size * scale + "px";
   e.style.letterSpacing = ((z.letterSpacing || 0) * scale) + "px";
@@ -1903,14 +1906,33 @@ function cellTransform(iw, ih, ix, iy, cw, ch) {
   const base = Math.max(CARD_W / iw, CARD_H / ih);
   return { scale: s / base, offsetX: -ix * s - (CARD_W - iw * s) / 2, offsetY: -iy * s - (CARD_H - ih * s) / 2 };
 }
-// Make sure there are 6 value cards to receive the mosaic (create blanks if needed).
-function ensureSixValueCards() {
-  let maxV = valueCards().reduce((m, c) => Math.max(m, parseFloat(c.state.value) || 0), -1);
-  while (valueCards().length < 6) {
-    maxV += 1;
-    deck.push({ id: newId(), state: Object.assign(blankCardState(), { value: String(maxV) }), thumb: "" });
-  }
-  return valueCards().slice(0, 6);
+// Background for one mosaic cell at grid position `pos` (0=top-left … 5=bottom-right), from the saved split.
+function splitCellBg(pos) {
+  const sp = deckShared.split;
+  if (!sp || !sp.dataUrl || sp.iw == null || pos < 0 || pos > 5) return null;
+  const cw = sp.w / 3, ch = sp.h / 2, c = pos % 3, r = Math.floor(pos / 3);
+  return { type: "custom", name: null, dataUrl: sp.dataUrl,
+           transform: cellTransform(sp.iw, sp.ih, sp.ix0 + c * cw, sp.iy0 + r * ch, cw, ch) };
+}
+function sameBg(a, b) {
+  return !!a && !!b && a.dataUrl === b.dataUrl && !!a.transform && !!b.transform &&
+    Math.abs(a.transform.offsetX - b.transform.offsetX) < 0.5 &&
+    Math.abs(a.transform.offsetY - b.transform.offsetY) < 0.5 &&
+    Math.abs(a.transform.scale - b.transform.scale) < 1e-4;
+}
+// Split mode: each value card shows the cell for its POSITION (1st value card →
+// top-left … 6th → bottom-right). Idempotent — only touches a card whose cell
+// changed, refreshing that card's thumbnail (and the live preview if it's the one
+// being edited). Never creates cards; a card takes its cell as it joins the list.
+function assignSplitCells() {
+  if (!deckShared.split || !deckShared.split.dataUrl) return;
+  valueCards().forEach((c, i) => {
+    const bg = splitCellBg(i);
+    if (!bg || sameBg(c.state.bgOwn, bg)) return;
+    c.state.bgOwn = bg;
+    makeThumb(c.state).then((t) => { c.thumb = t; const img = document.querySelector('.deck-card[data-id="' + c.id + '"] .dc-open img'); if (img) img.src = t; });
+    if (c.id === editingId) { state.bgOwn = JSON.parse(JSON.stringify(bg)); scheduleRender(); }
+  });
 }
 function applyMosaic() {
   const img = el("mosaicImg"); const iw = img.naturalWidth, ih = img.naturalHeight;
@@ -1918,28 +1940,23 @@ function applyMosaic() {
   const f = mosaicFrameRect();
   const ix0 = (f.x - mosaicT.tx) / mosaicT.s, iy0 = (f.y - mosaicT.ty) / mosaicT.s;
   const gw = f.w / mosaicT.s, gh = f.h / mosaicT.s;
-  const cw = gw / 3, ch = gh / 2;
-  const cards = ensureSixValueCards();
-  const six = new Set(cards.map((c) => c.id));
   deckShared.perCardBg = true;
-  deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh }; // remember it for re-editing
-  // keep non-mosaic cards (e.g. the landscape Protocol card) on the shared bg
+  // Save the split as a TEMPLATE (incl. the source size) instead of creating 6 cards.
+  deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh, iw, ih };
+  assignSplitCells(); // existing value cards take their cell; new ones take theirs as you make them
+  // non-value cards (the landscape Protocol card) keep the shared bg so per-card mode isn't blank
   deck.forEach((c) => {
-    if (six.has(c.id)) return; const s = c.state;
+    if (!c.state || c.state.kind !== "compile") return; const s = c.state;
     if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
-    if (s.kind === "compile" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
-  });
-  cards.forEach((card, i) => {
-    const c = i % 3, r = Math.floor(i / 3);
-    card.state.bgOwn = { type: "custom", name: null, dataUrl: mosaicSrc, transform: cellTransform(iw, ih, ix0 + c * cw, iy0 + r * ch, cw, ch) };
+    if (!s.bgOwnBack || s.bgOwnBack.type === "none") s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
   });
   if (!customBgs.includes(mosaicSrc)) { customBgs.unshift(mosaicSrc); customBgs = customBgs.slice(0, 12); saveCustomBgs(); buildBgGrid(); }
   saveShared(); saveDeck(); markDirty();
   closeMosaic();
   el("inCustomBg").checked = true;
-  // reload the edited card (no commit, so its new mosaic bg is kept), or select one
-  if (editingId && deck.some((d) => d.id === editingId)) { const card = deck.find((d) => d.id === editingId); setState(normalizeState(JSON.parse(JSON.stringify(card.state)))); syncStateToForm(); scheduleRender(); renderDeck(); }
-  else editProtocolCard();
+  // reload the edited card so it picks up its cell (if it's a value card); don't create one
+  if (editingId && deck.some((d) => d.id === editingId)) { const card = deck.find((d) => d.id === editingId); setState(normalizeState(JSON.parse(JSON.stringify(card.state)))); syncStateToForm(); scheduleRender(); }
+  renderDeck();
   refreshDeckThumbs(null);
 }
 
@@ -2048,6 +2065,9 @@ function onCardEdited() {
     deck[idx].state = cardSnapshot(state);
     deck[idx].thumb = await makeThumb(deck[idx].state);
     saveDeck();
+    // Split mode: a changed value can move the card to a new position → re-sort and
+    // let each card re-take the cell that matches its (new) position.
+    if (deckShared.split && deckShared.split.dataUrl && deck[idx].state.kind === "protocol") { renderDeck(); return; }
     const img = document.querySelector(`.deck-card[data-id="${id}"] .dc-open img`);
     if (img) img.src = deck[idx].thumb;
   }, 300);
@@ -2161,6 +2181,7 @@ function sortDeck() {
 
 function renderDeck() {
   sortDeck();
+  assignSplitCells(); // split mode: each value card takes the cell for its position
   const list = el("deckList");
   el("deckCount").textContent = deck.length;
   el("deckEmpty").hidden = deck.length > 0;
