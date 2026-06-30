@@ -327,6 +327,39 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 }
 .field-select:hover { border-color: var(--line-2); }
 .field-select:focus { outline: none; border-color: var(--accent-2); }
+
+/* Custom dropdown (themed popup the native <select> can't provide). The original
+   <select> stays in the DOM as the state source but is visually hidden. */
+.cselect-native { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.cselect { position: relative; flex: 1; }
+.cselect-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text);
+  padding: 8px 10px; font-family: inherit; font-size: 12px; cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.cselect-btn:hover { border-color: var(--line-2); }
+.cselect.open .cselect-btn, .cselect-btn:focus-visible { outline: none; border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(65, 224, 208, 0.12); }
+.cselect-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cselect-chev { color: var(--accent); font-size: 10px; line-height: 1; transition: transform 0.18s ease; }
+.cselect.open .cselect-chev { transform: rotate(180deg); }
+.cselect-menu {
+  position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; right: 0;
+  max-height: 264px; overflow-y: auto; margin: 0; padding: 6px; list-style: none;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; transform: translateY(-4px) scale(0.99); transform-origin: top center;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+}
+.cselect.open .cselect-menu { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+.cselect-opt {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px;
+  font-size: 12px; color: var(--text); cursor: pointer; transition: background 0.1s;
+}
+.cselect-opt.active { background: #232c3e; }
+.cselect-opt.is-selected { color: var(--accent); font-weight: 700; }
+.cselect-opt.is-selected::after { content: "✓"; margin-left: auto; color: var(--accent); }
+.cselect-menu::-webkit-scrollbar { width: 8px; }
+.cselect-menu::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 8px; }
 .bg-tools { display: flex; gap: 10px; margin-bottom: 12px; }
 .bg-grid {
   display: grid;
@@ -369,6 +402,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 
 /* ===== Preview stage ===== */
 .stage {
+  position: relative;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -380,6 +414,21 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
   padding: 16px;
   border: 1px solid var(--line);
 }
+
+/* Reusable small spinner (same animation as the share-gallery loader). */
+.spin {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid rgba(65, 224, 208, 0.16);
+  border-top-color: var(--accent); border-right-color: var(--accent-2);
+  animation: loader-spin 0.95s cubic-bezier(0.5, 0.1, 0.4, 0.9) infinite;
+}
+/* Editor preview loading overlay (heavy card / deck still rendering). */
+.preview-loading {
+  display: none; position: absolute; inset: 0; z-index: 8;
+  align-items: center; justify-content: center;
+  background: rgba(8, 10, 16, 0.55); backdrop-filter: blur(2px); border-radius: 10px;
+}
+.stage.loading .preview-loading { display: flex; }
 .card-canvas {
   width: auto;
   height: auto;
@@ -500,6 +549,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 }
 .deck-card.editing { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(65, 224, 208, 0.4); }
 .dc-open {
+  position: relative;
   display: block;
   width: 100%;
   padding: 0;
@@ -511,6 +561,10 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
   text-align: left;
 }
 .dc-open img { width: 100%; display: block; aspect-ratio: 744 / 1039; object-fit: contain; background: #05070c; transition: filter 0.15s; }
+.dc-spin { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; background: rgba(8, 10, 16, 0.5); }
+.dc-spin .spin { width: 26px; height: 26px; border-width: 3px; }
+.dc-open.loading .dc-spin { display: flex; }
+.dc-open.loading img { opacity: 0.12; }
 .dc-open:hover img { filter: brightness(1.12); }
 .deck-card .dc-actions { display: flex; border-top: 1px solid var(--line); }
 .deck-card .dc-actions button {

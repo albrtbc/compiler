@@ -846,7 +846,11 @@ async function scheduleRender(save = true) {
   layoutOverlay();
   if (save) debouncedSave();
   if (renderQueued) { renderQueued = false; const s = renderQueuedSave; renderQueuedSave = false; scheduleRender(s); }
+  else hidePreviewLoading(); // the (heavy) render that prompted the spinner has finished
 }
+const stageEl = document.querySelector(".stage");
+function showPreviewLoading() { if (stageEl) stageEl.classList.add("loading"); }
+function hidePreviewLoading() { if (stageEl) stageEl.classList.remove("loading"); }
 
 let debTimer = null;
 function debouncedRender() {
@@ -1337,8 +1341,16 @@ function deriveSharedFromCards(cards) {
 // (kind=null → all cards, e.g. the deck-wide title) and refresh the list.
 async function refreshDeckThumbs(kind) {
   const cards = deck.filter((c) => c && c.state && (!kind || c.state.kind === kind));
-  for (const c of cards) c.thumb = await makeThumb(c.state);
-  if (cards.length) { saveDeck(); renderDeck(); markDirty(); }
+  if (!cards.length) return;
+  cards.forEach((c) => { c._loading = true; });
+  renderDeck(); // show a spinner on each card being regenerated
+  for (const c of cards) {
+    c.thumb = await makeThumb(c.state);
+    c._loading = false;
+    const tile = document.querySelector('.deck-card[data-id="' + c.id + '"] .dc-open');
+    if (tile) { tile.classList.remove("loading"); const img = tile.querySelector("img"); if (img) img.src = c.thumb; }
+  }
+  saveDeck(); markDirty();
 }
 let sharedPropTimer = null;
 function propagateShared() {
@@ -1389,6 +1401,7 @@ function syncStateToForm() {
   el("inCode").value = deckShared.code || "";
   el("inCustomBg").checked = !!deckShared.perCardBg;
   el("inGlitchPreset").value = String(deckShared.glitchPreset || 0);
+  el("inGlitchPreset").dispatchEvent(new Event("cselect-sync")); // refresh the custom dropdown label
   refreshLogoUI();
   refreshBgSelection();
   syncBgAdjust();
@@ -1764,9 +1777,64 @@ el("inCode").addEventListener("input", () => {
   propagateTitle(); // deck-wide text → re-render every thumbnail + save shared + mark dirty
 });
 
+// Replace a native <select> with a themed custom dropdown (the native option list
+// can't be styled). The <select> stays as the state source; we mirror it and fire
+// its "change" so existing listeners keep working. Listen for "cselect-sync" to
+// reflect external value changes (e.g. syncStateToForm).
+function enhanceSelect(sel) {
+  sel.classList.add("cselect-native");
+  const wrap = document.createElement("div"); wrap.className = "cselect";
+  sel.parentNode.insertBefore(wrap, sel); wrap.appendChild(sel);
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "cselect-btn"; btn.setAttribute("aria-haspopup", "listbox"); btn.setAttribute("aria-expanded", "false");
+  const label = document.createElement("span"); label.className = "cselect-label";
+  const chev = document.createElement("span"); chev.className = "cselect-chev"; chev.textContent = "▾";
+  btn.append(label, chev);
+  const menu = document.createElement("ul"); menu.className = "cselect-menu"; menu.setAttribute("role", "listbox");
+  wrap.append(btn, menu);
+  const isOpen = () => wrap.classList.contains("open");
+  const setActive = (li) => { [...menu.children].forEach((x) => x.classList.remove("active")); if (li) li.classList.add("active"); };
+  function sync() {
+    const o = sel.options[sel.selectedIndex] || sel.options[0];
+    label.textContent = o ? o.textContent : "";
+    [...menu.children].forEach((li) => li.classList.toggle("is-selected", li.dataset.value === sel.value));
+  }
+  function build() {
+    menu.innerHTML = "";
+    [...sel.options].forEach((o) => {
+      const li = document.createElement("li"); li.className = "cselect-opt"; li.setAttribute("role", "option");
+      li.dataset.value = o.value; li.textContent = o.textContent; menu.appendChild(li);
+    });
+    sync();
+  }
+  function open() { wrap.classList.add("open"); btn.setAttribute("aria-expanded", "true"); const sel2 = menu.querySelector(".is-selected") || menu.firstChild; setActive(sel2); if (sel2) sel2.scrollIntoView({ block: "nearest" }); }
+  function close() { wrap.classList.remove("open"); btn.setAttribute("aria-expanded", "false"); setActive(null); }
+  function choose(li) { if (!li) return; if (sel.value !== li.dataset.value) { sel.value = li.dataset.value; sel.dispatchEvent(new Event("change", { bubbles: true })); } sync(); close(); btn.focus(); }
+  btn.addEventListener("click", (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
+  menu.addEventListener("click", (e) => { const li = e.target.closest(".cselect-opt"); if (li) choose(li); });
+  menu.addEventListener("mousemove", (e) => { const li = e.target.closest(".cselect-opt"); if (li) setActive(li); });
+  document.addEventListener("click", (e) => { if (!wrap.contains(e.target)) close(); });
+  btn.addEventListener("keydown", (e) => {
+    const items = [...menu.children];
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); if (!isOpen()) { open(); return; }
+      let i = items.findIndex((x) => x.classList.contains("active"));
+      i = e.key === "ArrowDown" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+      setActive(items[i]); items[i].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" || e.key === " ") {
+      if (isOpen()) { e.preventDefault(); choose(menu.querySelector(".active")); } else { e.preventDefault(); open(); }
+    } else if (e.key === "Escape") { close(); }
+  });
+  sel.addEventListener("change", sync);
+  sel.addEventListener("cselect-sync", sync);
+  build();
+  sel._cselectRebuild = build;
+}
+
 // Deck-wide front glitch preset dropdown (0 = none, 1..10 = preset).
 el("inGlitchPreset").innerHTML = '<option value="0">No glitch</option>' +
   GLITCH_PRESETS.map((p, i) => `<option value="${i + 1}">Glitch ${i + 1} · ${p.name}</option>`).join("");
+enhanceSelect(el("inGlitchPreset"));
 el("inGlitchPreset").addEventListener("change", () => {
   deckShared.glitchPreset = +el("inGlitchPreset").value;
   saveShared();
@@ -2215,9 +2283,11 @@ function renderDeck() {
     wrap.dataset.id = card.id;
     if (card.id === editingId) wrap.classList.add("editing");
     const title = (deckShared.title || "Untitled").trim() || "Untitled";
+    const loading = !card.thumb || card._loading;
     wrap.innerHTML = `
-      <button class="dc-open" title="Click to edit this card">
-        <img src="${card.thumb}" alt="${title}">
+      <button class="dc-open${loading ? " loading" : ""}" title="Click to edit this card">
+        <img src="${card.thumb || ""}" alt="${title}">
+        <span class="dc-spin"><span class="spin"></span></span>
       </button>
       <div class="dc-actions">
         <button class="dup" title="Duplicate">⧉</button>
@@ -2243,6 +2313,7 @@ function renderDeck() {
 function editCard(id) {
   const card = deck.find((d) => d.id === id);
   if (!card) return;
+  showPreviewLoading(); // spinner while the (possibly heavy) card renders
   commitCurrentCard();  // flush edits of the card we're leaving into the deck
   setState(normalizeState(JSON.parse(JSON.stringify(card.state))));
   compileSide = "front";
@@ -3058,6 +3129,8 @@ async function regenMissingThumbs() {
   for (const card of deck) {
     if (!card.thumb) {
       card.thumb = await makeThumb(card.state);
+      const tile = document.querySelector('.deck-card[data-id="' + card.id + '"] .dc-open');
+      if (tile) { tile.classList.remove("loading"); const img = tile.querySelector("img"); if (img) img.src = card.thumb; }
     }
   }
   saveDeck();
