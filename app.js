@@ -2107,7 +2107,8 @@ el("inMosaicImg").addEventListener("change", (e) => {
 });
 (function () { // drag to pan + scroll to zoom inside the stage
   const stage = el("mosaicStage"); let dragging = false, lx = 0, ly = 0;
-  stage.addEventListener("pointerdown", (e) => { if (el("mosaicImg").hidden) return; dragging = true; lx = e.clientX; ly = e.clientY; stage.classList.add("grabbing"); stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener("pointerdown", (e) => { if (el("mosaicImg").hidden) return; e.preventDefault(); dragging = true; lx = e.clientX; ly = e.clientY; stage.classList.add("grabbing"); stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener("dragstart", (e) => e.preventDefault()); // belt & suspenders: never start a native image drag
   stage.addEventListener("pointermove", (e) => { if (!dragging) return; mosaicT.tx += e.clientX - lx; mosaicT.ty += e.clientY - ly; lx = e.clientX; ly = e.clientY; applyMosaicTransform(); });
   const end = () => { dragging = false; stage.classList.remove("grabbing"); };
   stage.addEventListener("pointerup", end); stage.addEventListener("pointercancel", end);

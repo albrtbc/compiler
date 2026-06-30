@@ -802,7 +802,7 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
   background: var(--bg);
   touch-action: none;
 }
-.mosaic-img { position: absolute; top: 0; left: 0; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; cursor: grab; }
+.mosaic-img { position: absolute; top: 0; left: 0; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; pointer-events: none; cursor: grab; }
 .mosaic-stage.grabbing { cursor: grabbing; }
 .mosaic-stage.grabbing .mosaic-img { cursor: grabbing; }
 .mosaic-frame {
