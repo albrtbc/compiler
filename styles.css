@@ -86,6 +86,7 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
+.leftcol { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .editor { padding: 18px; }
 .preview {
   padding: 18px;
@@ -210,6 +211,31 @@ code {
 .btn-ghost { background: transparent; }
 .btn-danger { border-color: rgba(255, 107, 107, 0.5); color: var(--danger); }
 .btn-danger:hover { background: rgba(255, 107, 107, 0.12); border-color: var(--danger); }
+
+/* Top-bar actions: minimalist, flat buttons (like the deck-card icon actions) —
+   muted by default, quiet hover, and the save action gets a subtle accent only. */
+.topbar-actions .btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 7px 12px;
+}
+.topbar-actions .btn:hover { background: var(--panel-2); border-color: var(--line-2); color: var(--text); }
+.topbar-actions .btn-primary {
+  background: transparent;
+  border-color: rgba(65, 224, 208, 0.45);
+  color: var(--accent);
+}
+.topbar-actions .btn-primary:hover {
+  background: rgba(65, 224, 208, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  filter: none;
+}
+.topbar-actions .btn-ghost { border-color: transparent; color: var(--muted); }
+.topbar-actions .btn-ghost:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 
 /* Segmented toggles (card type, front/back) */
 .type-toggle, .seg { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
@@ -398,16 +424,6 @@ code {
 #bgZoomVal { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ===== Edit status ===== */
-.edit-status {
-  background: rgba(65, 224, 208, 0.08);
-  border: 1px solid var(--accent-2);
-  color: var(--accent);
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  margin-bottom: 16px;
-}
-
 /* ===== Deck ===== */
 .deck-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
 .deck-head h2 { font-size: 15px; letter-spacing: 2px; margin: 0; text-transform: uppercase; }
@@ -461,6 +477,26 @@ code {
 .deck-card .dc-actions button:hover { background: var(--panel-2); color: var(--text); }
 .deck-card .dc-actions button.del { color: var(--danger); }
 .deck-card .dc-actions button.del:hover { background: rgba(255, 107, 107, 0.14); color: var(--danger); }
+
+/* "＋ New card" placeholder tile at the end of the deck list */
+.deck-card-new {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  aspect-ratio: 744 / 1039;
+  border: 2px dashed var(--line-2);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.deck-card-new:hover { border-color: var(--accent-2); color: var(--text); background: rgba(65, 224, 208, 0.05); }
+.deck-card-new .dcn-plus { font-size: 34px; line-height: 1; }
+.deck-card-new .dcn-txt { font-size: 12px; letter-spacing: 0.5px; }
 
 /* ===== Responsive ===== */
 @media (max-width: 1100px) {
@@ -630,7 +666,9 @@ code {
   padding: 8px 10px;
   font-family: inherit;
   font-size: 13px;
+  text-transform: uppercase;
 }
+.deck-name-row input::placeholder { text-transform: none; }
 .deck-name-row input:focus { outline: none; border-color: var(--accent-2); }
 .saved-decks { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; }
 .saved-decks summary {

@@ -32,19 +32,18 @@
       <span class="brand-sub">card editor</span>
     </div>
     <div class="topbar-actions">
-      <button id="btnExport" class="btn btn-primary" type="button">⬇ Download PNG</button>
-      <button id="btnAddDeck" class="btn" type="button">＋ Add to deck</button>
-      <button id="btnAddAsNew" class="btn" type="button" hidden>＋ Add as new</button>
+      <button id="btnExport" class="btn" type="button">↗ Share</button>
+      <button id="btnSaveChanges" class="btn btn-primary" type="button" hidden>Save changes</button>
+      <button id="btnAddAsNew" class="btn" type="button" hidden>＋ Save as new</button>
       <button id="btnCancelEdit" class="btn btn-ghost" type="button" hidden>✕ Cancel</button>
     </div>
   </header>
 
   <main class="layout">
+    <!-- ============ LEFT COLUMN: EDITOR + MY DECKS ============ -->
+    <div class="leftcol">
     <!-- ============ EDITOR ============ -->
     <section class="panel editor" aria-label="Card editor">
-      <div id="editStatus" class="edit-status" hidden>
-        ✎ Editing a deck card — press <b>Save changes</b> to update it, or <b>Cancel</b> to discard.
-      </div>
 
       <div class="type-toggle">
         <button id="btnKindProtocol" class="seg-btn active" type="button">Compile card</button>
@@ -96,6 +95,14 @@
 
     </section>
 
+      <aside class="panel mydecks" aria-label="My decks">
+        <div class="deck-head">
+          <h2>My decks <span id="savedCount" class="count">0</span></h2>
+        </div>
+        <div id="savedList" class="saved-list"></div>
+      </aside>
+    </div>
+
     <!-- ============ PREVIEW ============ -->
     <section class="panel preview" aria-label="Preview">
       <div class="stage">
@@ -134,7 +141,7 @@
       <p id="renderHint" class="render-hint">Loading fonts and assets…</p>
     </section>
 
-    <!-- ============ RIGHT COLUMN: DECK + MY DECKS ============ -->
+    <!-- ============ RIGHT COLUMN: DECK ============ -->
     <div class="rightcol">
       <aside class="panel deck" aria-label="Deck">
         <div class="deck-head">
@@ -143,11 +150,8 @@
 
         <div class="deck-name-row">
           <input id="inDeckName" type="text" maxlength="50" placeholder="Untitled deck" autocomplete="off" />
-          <button id="btnSaveDeck" class="btn btn-sm btn-primary" type="button">Save</button>
         </div>
         <div class="deck-menu">
-          <button id="btnNewDeck" class="btn btn-sm" type="button">＋ New</button>
-          <button id="btnShareDeck" class="btn btn-sm" type="button">🔗 Share</button>
           <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
           <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63×88mm, with backs)">PDF</button>
           <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
@@ -159,16 +163,9 @@
         </div>
 
         <div id="deckEmpty" class="deck-empty">
-          No cards yet.<br />Press <b>“Add to deck”</b> to save the current card.
+          No cards yet.<br />Use the <b>＋ New card</b> tile to add one.
         </div>
         <div id="deckList" class="deck-list"></div>
-      </aside>
-
-      <aside class="panel mydecks" aria-label="My decks">
-        <div class="deck-head">
-          <h2>My decks <span id="savedCount" class="count">0</span></h2>
-        </div>
-        <div id="savedList" class="saved-list"></div>
       </aside>
     </div>
   </main>

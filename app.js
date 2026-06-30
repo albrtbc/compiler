@@ -111,6 +111,13 @@ function mergeShared(st) {
 
 let state = null;
 let editingId = null; // id of the deck card being edited, or null
+// Pending unsaved changes to the working deck (relative to its "My decks" copy).
+// Edits stay local until the user presses "Save changes"; we never auto-save the
+// named deck into the library on every tweak anymore.
+let deckDirty = false;
+// Snapshot of the last saved/baseline working state (deck + shared props + meta),
+// restored when the user presses Cancel to discard all pending changes.
+let revertSnapshot = null;
 // state.title / state.bg / state.logo are live views of the shared props, so the
 // existing controls edit the deck-wide title and per-kind bg/logo directly.
 function setState(obj) {
@@ -942,7 +949,7 @@ function deriveSharedFromCards(cards) {
 async function refreshDeckThumbs(kind) {
   const cards = deck.filter((c) => c && c.state && (!kind || c.state.kind === kind));
   for (const c of cards) c.thumb = await makeThumb(c.state);
-  if (cards.length) { saveDeck(); renderDeck(); autosaveNamedDeck(); }
+  if (cards.length) { saveDeck(); renderDeck(); markDirty(); }
 }
 let sharedPropTimer = null;
 function propagateShared() {
@@ -1141,7 +1148,7 @@ attachPanZoom(canvasBack);
 
 /* ---------------- Bindings ---------------- */
 ["inValue", "inCTop", "inCSub", "inCBot", "inCBack"].forEach((id) => {
-  el(id).addEventListener("input", () => { syncFormToState(); layoutOverlay(); debouncedRender(); });
+  el(id).addEventListener("input", () => { syncFormToState(); layoutOverlay(); debouncedRender(); onCardEdited(); });
 });
 // The protocol title / compile name appears on both faces — keep the two fields synced.
 function onTitleInput(srcId) {
@@ -1160,6 +1167,7 @@ PANEL_IDS.forEach((id) => {
   e.addEventListener("input", () => {
     if (!e.textContent.trim() && e.innerHTML) e.innerHTML = "";
     syncFormToState(); layoutOverlay(); debouncedRender();
+    onCardEdited();
   });
   e.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); document.execCommand("insertLineBreak"); }
@@ -1190,6 +1198,7 @@ function setKind(kind) {
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
+  onCardEdited();
 }
 el("btnKindProtocol").addEventListener("click", () => setKind("protocol"));
 el("btnKindCompile").addEventListener("click", () => setKind("compile"));
@@ -1367,11 +1376,6 @@ function downloadCanvas(cnv, filename) {
   }, "image/png");
 }
 
-el("btnExport").addEventListener("click", async () => {
-  await scheduleRender();
-  downloadCanvas(canvas, safeName(state.title) + ".png");
-});
-
 /* ---------------- Deck ---------------- */
 let idCounter = 0;
 function newId() {
@@ -1391,95 +1395,154 @@ async function makeThumb(st) {
   return t.toDataURL("image/jpeg", 0.78);
 }
 
-// Add to deck (new card) OR save changes (while editing). Saving keeps you in
-// edit mode so you can keep tweaking without creating duplicates.
-// Save changes (while editing) updates the card in place and KEEPS editing it —
-// nothing is cleared. When not editing, it adds a new card and clears for the next.
-el("btnAddDeck").addEventListener("click", async () => {
-  syncFormToState();
-  const snapshot = cardSnapshot(state);
-  const thumb = await makeThumb(snapshot);
-  if (editingId) {
-    const idx = deck.findIndex((d) => d.id === editingId);
-    if (idx >= 0) {
-      deck[idx].state = snapshot;
-      deck[idx].thumb = thumb;
-    }
-    saveDeck();
-    renderDeck();
-    autosaveNamedDeck();
-    flashSaved();
-  } else {
-    deck.push({ id: newId(), state: snapshot, thumb });
-    saveDeck();
-    renderDeck();
-    autosaveNamedDeck();
-    clearForNextCard(); // reset value + panels for the next card
-  }
-});
+// A fresh, empty per-card snapshot (shared title/bg/logo are kept deck-wide).
+function blankCardState() {
+  return { value: "", panelTop: "", panelMid: "", panelBot: "", kind: "protocol", compile: defaultCompile() };
+}
 
-// Add the current editor content as a NEW card (instead of overwriting), then keep
-// editing that new card — handy for building value variants quickly.
+// The card being edited is always a real entry in the deck, so editor changes have
+// to flow back into it. Commit the current form into deck[editingId] (no "Add to
+// deck" step anymore) and refresh that card's thumbnail.
+function commitCurrentCard() {
+  const id = editingId;
+  if (!id) return;
+  clearTimeout(cardEditTimer);
+  const idx = deck.findIndex((d) => d.id === id);
+  if (idx < 0) return;
+  syncFormToState();
+  deck[idx].state = cardSnapshot(state);
+  saveDeck();
+  makeThumb(deck[idx].state).then((t) => {
+    const i = deck.findIndex((d) => d.id === id);
+    if (i < 0) return;
+    deck[i].thumb = t;
+    const img = document.querySelector(`.deck-card[data-id="${id}"] .dc-open img`);
+    if (img) img.src = t;
+  });
+}
+
+// Per-card edit (value / panels / kind): mark pending and, debounced, commit into
+// the deck card + refresh its thumbnail in place.
+let cardEditTimer = null;
+function onCardEdited() {
+  if (!editingId) return;
+  markDirty();
+  const id = editingId;
+  clearTimeout(cardEditTimer);
+  cardEditTimer = setTimeout(async () => {
+    const idx = deck.findIndex((d) => d.id === id);
+    if (idx < 0) return;
+    syncFormToState();
+    deck[idx].state = cardSnapshot(state);
+    deck[idx].thumb = await makeThumb(deck[idx].state);
+    saveDeck();
+    const img = document.querySelector(`.deck-card[data-id="${id}"] .dc-open img`);
+    if (img) img.src = deck[idx].thumb;
+  }, 300);
+}
+
+// "＋ New card" tile: add a fresh blank card to the deck and start editing it.
+async function addNewCard() {
+  commitCurrentCard();
+  const snap = blankCardState();
+  const id = newId();
+  deck.push({ id, state: snap, thumb: await makeThumb(snap), _new: true }); // pin to end until saved
+  saveDeck();
+  markDirty();
+  setState(normalizeState(JSON.parse(JSON.stringify(snap))));
+  compileSide = "front";
+  setEditing(id);
+  syncStateToForm();
+  renderDeck();
+  scheduleRender();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// Save the current card's content as a NEW card (a copy/variant), then keep editing
+// that new card. The change stays pending until "Save changes".
 el("btnAddAsNew").addEventListener("click", async () => {
+  commitCurrentCard();
   syncFormToState();
   const snapshot = cardSnapshot(state);
   const thumb = await makeThumb(snapshot);
   const id = newId();
-  deck.push({ id, state: snapshot, thumb });
+  deck.push({ id, state: snapshot, thumb, _new: true }); // pin to end until saved
   saveDeck();
   setEditing(id); // continue editing the freshly added card
   renderDeck();
-  autosaveNamedDeck();
-  const b = el("btnAddAsNew"); b.textContent = "✓ Added"; clearTimeout(addNewFlash);
-  addNewFlash = setTimeout(() => { b.textContent = "＋ Add as new"; }, 1100);
+  markDirty();
+  const b = el("btnAddAsNew"); b.textContent = "✓ Saved"; clearTimeout(addNewFlash);
+  addNewFlash = setTimeout(() => { b.textContent = "Save as new"; }, 1100);
 });
 let addNewFlash = null;
 
-// Clear the per-card fields so the next card in the same protocol is quick to build.
-function clearForNextCard() {
-  state.value = "";
-  state.panelTop = "";
-  state.panelMid = "";
-  state.panelBot = "";
-  state.compile = defaultCompile();
-  syncStateToForm();
-  scheduleRender();
-}
-
-let flashTimer = null;
-function flashSaved() {
-  const b = el("btnAddDeck");
-  b.textContent = "✓ Saved";
-  clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { b.textContent = editingId ? "💾 Save changes" : "＋ Add to deck"; }, 1100);
-}
-
-el("btnCancelEdit").addEventListener("click", () => {
+el("btnCancelEdit").addEventListener("click", async () => {
+  revertPendingChanges();          // discard all unsaved changes → back to the last baseline
   setEditing(null);
-  setState(defaultState());
-  syncStateToForm();
-  scheduleRender();
+  renderSavedDecks();
+  await editProtocolCard();        // re-render the reverted deck + select a card to edit
+  regenMissingThumbs().then(renderDeck); // rebuild any thumbnails the baseline was missing
 });
+
+// Show/hide the editor toolbar buttons. Editing is always active (the current card
+// is always in the deck), so every "save" affordance keys off pending changes.
+//   · Save changes / Save as new / Cancel → only when there are pending changes
+function refreshToolbar() {
+  el("btnCancelEdit").hidden = !deckDirty;
+  el("btnAddAsNew").hidden = !editingId || !deckDirty;
+  el("btnSaveChanges").hidden = !deckDirty;
+}
+
+// Flag the working deck as having unsaved changes and reflect it in the toolbar.
+function markDirty() {
+  if (deckDirty) return;
+  deckDirty = true;
+  refreshToolbar();
+  saveDeckMeta();
+}
+
+// Remember the current working state as the baseline Cancel reverts to. Called
+// whenever we reach a clean/known checkpoint: load, save, new, clear, import.
+function captureRevertBaseline() {
+  revertSnapshot = {
+    deck: JSON.parse(JSON.stringify(deck)),
+    deckShared: JSON.parse(JSON.stringify(deckShared)),
+    currentDeckId, currentDeckName, dirty: deckDirty,
+  };
+}
+
+// Discard all pending changes, restoring the last captured baseline.
+function revertPendingChanges() {
+  if (!revertSnapshot) return;
+  deck = JSON.parse(JSON.stringify(revertSnapshot.deck));
+  setDeckShared(JSON.parse(JSON.stringify(revertSnapshot.deckShared)));
+  currentDeckId = revertSnapshot.currentDeckId;
+  currentDeckName = revertSnapshot.currentDeckName;
+  el("inDeckName").value = currentDeckName || "";
+  deckDirty = revertSnapshot.dirty;
+  saveShared(); saveDeck(); saveDeckMeta();
+}
 
 function setEditing(id) {
   editingId = id;
-  const editing = !!id;
-  el("editStatus").hidden = !editing;
-  el("btnCancelEdit").hidden = !editing;
-  el("btnAddAsNew").hidden = !editing;
-  el("btnAddDeck").textContent = editing ? "💾 Save changes" : "＋ Add to deck";
   document.querySelectorAll(".deck-card").forEach((c) => {
     c.classList.toggle("editing", !!id && c.dataset.id === id);
   });
+  refreshToolbar();
 }
 
-// Keep the working deck ordered: Protocol card (landscape) first, then by value asc.
+// Keep the working deck ordered: Protocol card (landscape) first, then by value
+// asc. Freshly-added cards (_new) stay pinned at the end until the deck is saved,
+// so a blank card you're composing doesn't jump around by value while you type.
 function sortDeck() {
   deck.sort((a, b) => {
     const pa = a.state.kind === "compile" ? 0 : 1;
     const pb = b.state.kind === "compile" ? 0 : 1;
     if (pa !== pb) return pa - pb;
     if (pa === 0) return 0;
+    const na = a._new ? 1 : 0, nb = b._new ? 1 : 0;
+    if (na !== nb) return na - nb; // new (unsaved) cards last
+    if (na === 1) return 0;        // keep insertion order among new cards
     return (parseFloat(a.state.value) || 0) - (parseFloat(b.state.value) || 0);
   });
 }
@@ -1511,11 +1574,20 @@ function renderDeck() {
     wrap.querySelector(".del").addEventListener("click", () => delCard(card.id));
     list.appendChild(wrap);
   });
+  // Trailing "＋ New card" tile — start a fresh blank card from scratch.
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "deck-card-new";
+  add.title = "New card from scratch";
+  add.innerHTML = `<span class="dcn-plus">＋</span><span class="dcn-txt">New card</span>`;
+  add.addEventListener("click", addNewCard);
+  list.appendChild(add);
 }
 
 function editCard(id) {
   const card = deck.find((d) => d.id === id);
   if (!card) return;
+  commitCurrentCard();  // flush edits of the card we're leaving into the deck
   setState(normalizeState(JSON.parse(JSON.stringify(card.state))));
   compileSide = "front";
   setEditing(id);
@@ -1530,7 +1602,7 @@ function dupCard(id) {
   deck.push({ id: newId(), state: JSON.parse(JSON.stringify(card.state)), thumb: card.thumb });
   saveDeck();
   renderDeck();
-  autosaveNamedDeck();
+  markDirty();
 }
 
 async function dlCard(card) {
@@ -1587,10 +1659,10 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
 async function loadSavedDecks() {
   try { savedDecks = (await idbGet("savedDecks")) || []; } catch (e) { savedDecks = []; }
   if (!Array.isArray(savedDecks)) savedDecks = [];
-  try { const m = await idbGet("currentDeckMeta"); if (m) { currentDeckId = m.id || null; currentDeckName = m.name || ""; } } catch (e) {}
+  try { const m = await idbGet("currentDeckMeta"); if (m) { currentDeckId = m.id || null; currentDeckName = m.name || ""; deckDirty = !!m.dirty; } } catch (e) {}
 }
 function saveSavedDecks() { idbSet("savedDecks", savedDecks).catch((e) => console.warn("saveSavedDecks", e)); }
-function saveDeckMeta() { idbSet("currentDeckMeta", { id: currentDeckId, name: currentDeckName }).catch(() => {}); }
+function saveDeckMeta() { idbSet("currentDeckMeta", { id: currentDeckId, name: currentDeckName, dirty: deckDirty }).catch(() => {}); }
 
 // The background used by a deck (first card that has one) for its row thumbnail.
 function deckBgSrc(d) {
@@ -1647,25 +1719,52 @@ function upsertSavedDeck(name) {
   saveSavedDecks(); saveDeckMeta(); renderSavedDecks();
 }
 
-// If the deck already has a name, keep its saved copy in sync on every change.
-function autosaveNamedDeck() {
-  const name = el("inDeckName").value.trim();
-  if (name) upsertSavedDeck(name);
-}
-
-let deckSaveFlash = null;
-async function saveCurrentDeck() {
-  if (!deck.length) { alert("The deck is empty — add some cards first."); return; }
+// Persist the working deck into the "My decks" library, prompting for a name if it
+// has none yet. Returns true on success, false if empty or the user cancelled.
+async function saveDeckToLibrary() {
+  if (!deck.length) { alert("The deck is empty — add some cards first."); return false; }
   let name = el("inDeckName").value.trim();
   if (!name) {
     name = await showModal({ title: "Save deck", body: "Name this deck:", input: true, value: currentDeckName || "My deck", confirmLabel: "Save", danger: false });
-    if (name === null) return;
+    if (name === null) return false;
     name = name.trim() || "Untitled deck";
-    el("inDeckName").value = name;
   }
+  name = name.toUpperCase(); // deck names are always stored/shown uppercase
+  el("inDeckName").value = name;
   upsertSavedDeck(name);
-  const b = el("btnSaveDeck"); b.textContent = "✓ Saved"; clearTimeout(deckSaveFlash);
-  deckSaveFlash = setTimeout(() => { b.textContent = "Save"; }, 1100);
+  return true;
+}
+
+// "Save changes" — the single save action. Commits the card being edited into the
+// working deck, then saves the whole deck into "My decks" (named, else prompts).
+let saveChangesFlash = null;
+async function doSaveChanges() {
+  if (editingId) {
+    syncFormToState();
+    const snapshot = cardSnapshot(state);
+    const thumb = await makeThumb(snapshot);
+    const idx = deck.findIndex((d) => d.id === editingId);
+    if (idx >= 0) { deck[idx].state = snapshot; deck[idx].thumb = thumb; }
+    saveDeck();
+    renderDeck();
+  }
+  const ok = await saveDeckToLibrary();
+  if (!ok) return; // empty or name prompt cancelled → still pending
+  deckDirty = false;
+  deck.forEach((c) => { delete c._new; }); // saved → cards now sort by value
+  saveDeck();
+  renderDeck();                            // reposition any formerly-new cards
+  saveDeckMeta();
+  captureRevertBaseline();
+  // Hide the other pending-change affordances right away; briefly flash "✓ Saved"
+  // on the save button before it hides too.
+  el("btnCancelEdit").hidden = true;
+  el("btnAddAsNew").hidden = true;
+  const b = el("btnSaveChanges");
+  b.hidden = false;
+  b.textContent = "✓ Saved";
+  clearTimeout(saveChangesFlash);
+  saveChangesFlash = setTimeout(() => { b.textContent = "Save changes"; refreshToolbar(); }, 1000);
 }
 
 function loadSavedDeck(id) {
@@ -1675,6 +1774,8 @@ function loadSavedDeck(id) {
   if (d.shared) setDeckShared(d.shared); else deriveSharedFromCards(deck);
   saveShared();
   currentDeckId = id; currentDeckName = d.name; el("inDeckName").value = d.name;
+  deckDirty = false; // freshly loaded → matches its saved copy
+  captureRevertBaseline();
   setEditing(null); saveDeck(); saveDeckMeta();
   renderDeck(); renderSavedDecks();
   regenMissingThumbs().then(renderDeck);
@@ -1684,8 +1785,17 @@ function loadSavedDeck(id) {
 // Auto-select the first card for editing. The deck is sorted (protocol card first
 // when there is one), so this picks the protocol card if present, otherwise the
 // first card — never leaving nothing selected.
-function editProtocolCard() {
-  if (deck.length) editCard(deck[0].id);
+// Select a card to edit. The deck always keeps a current card, so create a blank
+// one first if the deck is empty (e.g. a brand-new or just-cleared deck).
+async function editProtocolCard() {
+  if (!deck.length) {
+    const snap = blankCardState();
+    deck.push({ id: newId(), state: snap, thumb: await makeThumb(snap) });
+    saveDeck();
+  }
+  sortDeck();
+  renderDeck();
+  editCard(deck[0].id);
 }
 
 async function deleteSavedDeck(id) {
@@ -1698,18 +1808,10 @@ async function deleteSavedDeck(id) {
   saveSavedDecks(); renderSavedDecks();
 }
 
-el("btnSaveDeck").addEventListener("click", saveCurrentDeck);
-el("inDeckName").addEventListener("input", () => { currentDeckName = el("inDeckName").value; saveDeckMeta(); });
-
-el("btnNewDeck").addEventListener("click", async () => {
-  if (deck.length) {
-    const ok = await showModal({ title: "New deck?", body: "Start a new empty deck? (Save your current one first if you want to keep it.)", confirmLabel: "New deck", danger: false });
-    if (!ok) return;
-  }
-  deck = []; currentDeckId = null; currentDeckName = ""; el("inDeckName").value = "";
-  resetShared(); saveShared();
-  setState(defaultState()); syncStateToForm();
-  setEditing(null); saveDeck(); saveDeckMeta(); renderDeck(); renderSavedDecks(); scheduleRender();
+el("btnSaveChanges").addEventListener("click", doSaveChanges);
+el("inDeckName").addEventListener("input", () => {
+  currentDeckName = el("inDeckName").value;
+  if (deck.length) markDirty(); else saveDeckMeta();
 });
 
 /* ---------------- Share link (compressed deck in the URL hash) ---------------- */
@@ -1788,9 +1890,9 @@ async function buildSharePayload(name) {
 
 const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
 
-el("btnShareDeck").addEventListener("click", async () => {
+el("btnExport").addEventListener("click", async () => {
   if (!deck.length) { alert("The deck is empty."); return; }
-  const btn = el("btnShareDeck");
+  const btn = el("btnExport");
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
   let url, viaService = false;
   try {
@@ -1960,6 +2062,8 @@ el("shareImport").addEventListener("click", async () => {
   setEditing(null); saveDeck(); saveDeckMeta(); renderDeck();
   await regenMissingThumbs(); renderDeck();
   editProtocolCard(); // auto-select the protocol card for editing
+  markDirty(); // imported deck isn't in "My decks" yet → offer to save it
+  captureRevertBaseline(); // the imported deck is the baseline Cancel reverts to
 });
 
 async function delCard(id) {
@@ -1968,10 +2072,14 @@ async function delCard(id) {
   const ok = await showConfirm({ title: "Delete card?", body: `Delete ${name} from the deck? This can't be undone.` });
   if (!ok) return;
   deck = deck.filter((d) => d.id !== id);
-  if (editingId === id) setEditing(null);
   saveDeck();
-  renderDeck();
-  autosaveNamedDeck();
+  markDirty();
+  if (editingId === id) {
+    setEditing(null);
+    await editProtocolCard(); // select another card (or a fresh blank one if none left)
+  } else {
+    renderDeck();
+  }
 }
 
 
@@ -2112,13 +2220,13 @@ el("btnExportDeck").addEventListener("click", () => {
 el("btnClearDeck").addEventListener("click", async () => {
   const ok = await showConfirm({
     title: "Clear all?",
-    body: "This empties the deck and resets the editor fields, and deselects the background (your uploaded backgrounds are kept). This can't be undone.",
+    body: "This empties the deck (leaving a single blank card) and deselects the background (your uploaded backgrounds are kept). This can't be undone.",
     confirmLabel: "Clear all",
   });
   if (!ok) return;
   deck = [];
+  deckDirty = false;               // fresh deck → nothing pending
   resetShared();                   // clear the shared logo/background for both kinds
-  setState(defaultState());        // blank editor; background deselected (uploads in customBgs stay)
   compileSide = "front";
   currentDeckId = null;
   currentDeckName = "";
@@ -2127,10 +2235,9 @@ el("btnClearDeck").addEventListener("click", async () => {
   saveDeck();
   saveShared();
   saveDeckMeta();
-  syncStateToForm();               // refreshes the form + deselects bg via refreshBgSelection
-  renderDeck();
   renderSavedDecks();              // clear the "current" highlight on any saved deck
-  scheduleRender();
+  await editProtocolCard();        // always leave one blank current card in the list
+  captureRevertBaseline();         // baseline = the fresh single-card deck
 });
 
 el("inImportDeck").addEventListener("change", (e) => {
@@ -2156,6 +2263,8 @@ el("inImportDeck").addEventListener("change", (e) => {
         setState(defaultState()); syncStateToForm();
       }
       saveDeck();
+      markDirty(); // imported deck isn't in "My decks" yet → offer to save it
+      captureRevertBaseline(); // the imported deck is the baseline Cancel reverts to
       // regenerate any missing thumbnails
       regenMissingThumbs().then(renderDeck);
       renderDeck();
@@ -2192,6 +2301,7 @@ async function regenMissingThumbs() {
   renderDeck();
   renderSavedDecks();
   syncStateToForm();
+  refreshToolbar(); // reflect any restored pending-changes state
 
   try {
     await loadFonts();
@@ -2219,5 +2329,11 @@ async function regenMissingThumbs() {
 
   renderHint.textContent = "Tip: hold Shift and drag to move the background · Shift + scroll to zoom · over the logo it moves/zooms the logo.";
   await scheduleRender();
+  // The deck always has a current card to edit (creating a blank one if empty),
+  // unless the URL carries a shared deck (handled by the gallery below).
+  if (!/[#&](deck|d)=/.test(location.hash)) {
+    await editProtocolCard();
+    captureRevertBaseline(); // baseline = the startup deck (incl. any auto-created card)
+  }
   await checkSharedDeck(); // import a deck if the URL carries one
 })();
