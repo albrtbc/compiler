@@ -84,7 +84,7 @@ const defaultState = () => ({
   // type: none | preset | custom · transform pans/zooms the background
   bg: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
   logo: { dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 }, // always tinted white
-  kind: "protocol", // "protocol" | "compile"
+  kind: "compile", // "compile" = vertical value card · "protocol" = landscape Protocol card
   // Per-card background data, used only when the deck-wide `perCardBg` mode is on;
   // otherwise the card renders the shared bg and bgOwn is ignored / not persisted.
   bgOwn: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
@@ -150,12 +150,12 @@ function setState(obj) {
     enumerable: true, configurable: true,
     get() {
       if (!deckShared.perCardBg) return sharedFor(state.kind).bg;
-      if (state.kind === "compile" && bgEditSide === "back") return state.bgOwnBack || state.bgOwn;
+      if (state.kind === "protocol" && bgEditSide === "back") return state.bgOwnBack || state.bgOwn;
       return state.bgOwn;
     },
     set(v) {
       if (!deckShared.perCardBg) { sharedFor(state.kind).bg = v; return; }
-      if (state.kind === "compile" && bgEditSide === "back") state.bgOwnBack = v;
+      if (state.kind === "protocol" && bgEditSide === "back") state.bgOwnBack = v;
       else state.bgOwn = v;
     },
   });
@@ -832,7 +832,7 @@ async function scheduleRender(save = true) {
   if (rendering) { renderQueued = true; renderQueuedSave = renderQueuedSave || save; return; }
   rendering = true;
   try {
-    if (state.kind === "compile") {
+    if (state.kind === "protocol") {
       await renderCompileLandscape(state, "front", canvas);
       await renderCompileLandscape(state, "back", canvasBack);
     } else {
@@ -841,7 +841,7 @@ async function scheduleRender(save = true) {
   } catch (e) {
     console.error(e);
   }
-  if (backHolder) backHolder.hidden = state.kind !== "compile";
+  if (backHolder) backHolder.hidden = state.kind !== "protocol";
   rendering = false;
   layoutOverlay();
   if (save) debouncedSave();
@@ -1052,7 +1052,7 @@ function layoutOneOverlay(cnv, overlay, hotspotId, mode, ids) {
 
 function layoutOverlay() {
   if (!cardOverlay) return;
-  if (state.kind === "compile") {
+  if (state.kind === "protocol") {
     layoutOneOverlay(canvas, cardOverlay, "logoHotspot", "front", FRONT_IDS);
     layoutOneOverlay(canvasBack, cardOverlayBack, "logoHotspotBack", "back", BACK_IDS);
   } else {
@@ -1187,13 +1187,35 @@ function rehydrateFromDict(obj, dict) {
   }
   return obj;
 }
+/* ---------------- kind naming migration ----------------
+   The kind strings were historically inverted: the landscape "Protocol card" was
+   stored as kind:"compile" and the vertical value "Compile card" as kind:"protocol".
+   In memory we now use coherent names — value card = "compile", landscape = "protocol".
+   Persisted data and existing share links stay in the LEGACY format, so we flip kinds
+   at every I/O boundary. The flip is symmetric (its own inverse): the SAME swap maps
+   legacy→coherent on read and coherent→legacy on write. deckShared's per-kind
+   {protocol,compile} sub-objects are swapped to match. */
+function flipKind(k) { return k === "compile" ? "protocol" : k === "protocol" ? "compile" : k; }
+function flipStateKind(st) { if (st && typeof st === "object" && typeof st.kind === "string") st.kind = flipKind(st.kind); return st; }
+function flipCardsKinds(arr) { if (Array.isArray(arr)) arr.forEach((c) => c && c.state && flipStateKind(c.state)); return arr; }
+function flipSharedKeys(sh) { if (sh && typeof sh === "object") { const p = sh.protocol; sh.protocol = sh.compile; sh.compile = p; } return sh; }
+function flipKindsForKey(key, val) {
+  if (val == null) return val;
+  if (key === "current") return flipStateKind(val);
+  if (key === "deck") return flipCardsKinds(val);
+  if (key === "deckShared") return flipSharedKeys(val);
+  if (key === "savedDecks" && Array.isArray(val)) val.forEach((d) => { if (d) { flipCardsKinds(d.cards); flipSharedKeys(d.shared); } });
+  return val;
+}
 // Save/load a value with its images pooled out (never touches the live in-memory copy).
 async function idbSetPooled(key, val) {
-  return idbSet(key, await dehydrateImages(JSON.parse(JSON.stringify(val))));
+  const clone = flipKindsForKey(key, JSON.parse(JSON.stringify(val))); // store legacy kind format
+  return idbSet(key, await dehydrateImages(clone));
 }
 async function idbGetPooled(key) {
   const v = await idbGet(key);
-  return v == null ? v : rehydrateImages(v);
+  if (v == null) return v;
+  return flipKindsForKey(key, await rehydrateImages(v)); // legacy → coherent kinds
 }
 
 /* ---------------- Persistence ---------------- */
@@ -1220,7 +1242,7 @@ function normalizeState(s) {
   st.bg.transform = Object.assign(defaultTransform(), st.bg.transform || {});
   migrateBg(st.bg);
   st.logo = Object.assign({ dataUrl: null, zoom: 1 }, s.logo || {});
-  st.kind = s.kind === "compile" ? "compile" : "protocol";
+  st.kind = s.kind === "protocol" ? "protocol" : "compile"; // landscape="protocol", value="compile" (default)
   st.compile = Object.assign(defaultCompile(), s.compile || {});
   st.bgOwn = Object.assign(defaultBg(), s.bgOwn || {});
   st.bgOwn.transform = Object.assign(defaultTransform(), st.bgOwn.transform || {});
@@ -1295,8 +1317,8 @@ async function loadShared() {
   try { cur = await idbGetPooled("current"); } catch (e) {}
   deckShared.title = titleFromCards(deck) || (cur && cur.title) || "";
   ["protocol", "compile"].forEach((kind) => {
-    const card = deck.find((c) => c && c.state && (c.state.kind === kind || (kind === "protocol" && c.state.kind !== "compile")));
-    const src = (card && card.state) || (cur && (cur.kind || "protocol") === kind ? cur : null);
+    const card = deck.find((c) => c && c.state && c.state.kind === kind);
+    const src = (card && card.state) || (cur && (cur.kind || "compile") === kind ? cur : null);
     if (src) deckShared[kind] = normalizeShared(src);
   });
   saveShared();
@@ -1307,7 +1329,7 @@ function deriveSharedFromCards(cards) {
   resetShared();
   deckShared.title = titleFromCards(cards);
   ["protocol", "compile"].forEach((kind) => {
-    const card = (cards || []).find((c) => c && c.state && (c.state.kind === kind || (kind === "protocol" && c.state.kind !== "compile")));
+    const card = (cards || []).find((c) => c && c.state && c.state.kind === kind);
     if (card && card.state) deckShared[kind] = normalizeShared(card.state);
   });
 }
@@ -1374,13 +1396,14 @@ function syncStateToForm() {
   refreshBgSideToggle();
 }
 
-// Show/hide protocol vs compile fields and update the type/side toggles.
+// Show/hide the two card types' fields and update the type/side toggles.
+// kind "protocol" = the landscape "Protocol card"; "compile" = the vertical "Compile card".
 function applyKind() {
-  const compile = state.kind === "compile";
-  document.querySelectorAll(".protocol-only").forEach((e) => { e.hidden = compile; });
-  document.querySelectorAll(".compile-only").forEach((e) => { e.hidden = !compile; });
-  el("btnKindProtocol").classList.toggle("active", !compile);
-  el("btnKindCompile").classList.toggle("active", compile);
+  const isLandscape = state.kind === "protocol";
+  document.querySelectorAll(".protocol-only").forEach((e) => { e.hidden = isLandscape; });  // .protocol-only = value-card fields
+  document.querySelectorAll(".compile-only").forEach((e) => { e.hidden = !isLandscape; });  // .compile-only = landscape fields
+  el("btnKindProtocol").classList.toggle("active", isLandscape);   // "Protocol card" button
+  el("btnKindCompile").classList.toggle("active", !isLandscape);   // "Compile card" button
 }
 
 function refreshLogoUI() {
@@ -1450,7 +1473,7 @@ const panZoomKey = (e) => e.shiftKey;
 // Hexagon zone for a given canvas (back canvas → compile back hex).
 function hexForCanvas(cnv) {
   if (cnv === canvasBack) return COMPILE_BACK.hex;
-  return state.kind === "compile" ? COMPILE_FRONT.hex : ZONES.hex;
+  return state.kind === "protocol" ? COMPILE_FRONT.hex : ZONES.hex;
 }
 function pointOn(cnv, e) {
   const r = cnv.getBoundingClientRect(), f = scaleFactor(cnv);
@@ -1466,7 +1489,7 @@ function clampLogoZoom(z) { return Math.max(0.5, Math.min(3, z)); }
 // Interacting with a canvas's background selects that face for editing (compile
 // card, per-card mode): the front canvas → front bg, the back canvas → back bg.
 function selectBgFaceForCanvas(cnv) {
-  if (!deckShared.perCardBg || state.kind !== "compile") return;
+  if (!deckShared.perCardBg || state.kind !== "protocol") return;
   const side = cnv === canvasBack ? "back" : "front";
   if (bgEditSide === side) return;
   bgEditSide = side;
@@ -1717,7 +1740,7 @@ el("inCustomBg").addEventListener("change", () => {
     const seed = (s) => {
       if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
       // compile cards get a separate back-face bg, seeded the same so nothing changes yet
-      if (s.kind === "compile" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
+      if (s.kind === "protocol" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
     };
     seed(state);
     deck.forEach((c) => seed(c.state));
@@ -1755,7 +1778,7 @@ el("inGlitchPreset").addEventListener("change", () => {
 // Front/Back background selector — only shown for the compile (Protocol) card in
 // per-card mode, since that card has two faces that can each have their own bg.
 function refreshBgSideToggle() {
-  const show = state.kind === "compile" && deckShared.perCardBg;
+  const show = state.kind === "protocol" && deckShared.perCardBg;
   el("bgSideToggle").hidden = !show;
   if (!show) bgEditSide = "front";
   el("btnBgFront").classList.toggle("active", bgEditSide === "front");
@@ -1832,7 +1855,7 @@ let mosaicSrc = "";                   // dataUrl of the loaded image
 
 // The 6 value cards (kind "protocol"), in value order.
 function valueCards() {
-  return deck.filter((c) => c && c.state && c.state.kind === "protocol")
+  return deck.filter((c) => c && c.state && c.state.kind === "compile")
     .sort((a, b) => (parseFloat(a.state.value) || 0) - (parseFloat(b.state.value) || 0));
 }
 function mosaicFrameRect() { const f = el("mosaicFrame"); return { x: f.offsetLeft, y: f.offsetTop, w: f.offsetWidth, h: f.offsetHeight }; }
@@ -1946,7 +1969,7 @@ function applyMosaic() {
   assignSplitCells(); // existing value cards take their cell; new ones take theirs as you make them
   // non-value cards (the landscape Protocol card) keep the shared bg so per-card mode isn't blank
   deck.forEach((c) => {
-    if (!c.state || c.state.kind !== "compile") return; const s = c.state;
+    if (!c.state || c.state.kind !== "protocol") return; const s = c.state;
     if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
     if (!s.bgOwnBack || s.bgOwnBack.type === "none") s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
   });
@@ -2014,7 +2037,7 @@ function newId() {
 
 async function makeThumb(st) {
   const off = document.createElement("canvas");
-  if (st.kind === "compile") await renderCompileLandscape(st, "front", off); // 1039×744 landscape
+  if (st.kind === "protocol") await renderCompileLandscape(st, "front", off); // 1039×744 landscape
   else { off.width = CARD_W; off.height = CARD_H; await renderCard(st, off); }
   const tw = 240;
   const t = document.createElement("canvas");
@@ -2026,7 +2049,7 @@ async function makeThumb(st) {
 
 // A fresh, empty per-card snapshot (shared title/bg/logo are kept deck-wide).
 function blankCardState() {
-  return { value: "", panelTop: "", panelMid: "", panelBot: "", kind: "protocol", compile: defaultCompile() };
+  return { value: "", panelTop: "", panelMid: "", panelBot: "", kind: "compile", compile: defaultCompile() };
 }
 
 // The card being edited is always a real entry in the deck, so editor changes have
@@ -2067,7 +2090,7 @@ function onCardEdited() {
     saveDeck();
     // Split mode: a changed value can move the card to a new position → re-sort and
     // let each card re-take the cell that matches its (new) position.
-    if (deckShared.split && deckShared.split.dataUrl && deck[idx].state.kind === "protocol") { renderDeck(); return; }
+    if (deckShared.split && deckShared.split.dataUrl && deck[idx].state.kind === "compile") { renderDeck(); return; }
     const img = document.querySelector(`.deck-card[data-id="${id}"] .dc-open img`);
     if (img) img.src = deck[idx].thumb;
   }, 300);
@@ -2168,8 +2191,8 @@ function setEditing(id) {
 // so a blank card you're composing doesn't jump around by value while you type.
 function sortDeck() {
   deck.sort((a, b) => {
-    const pa = a.state.kind === "compile" ? 0 : 1;
-    const pb = b.state.kind === "compile" ? 0 : 1;
+    const pa = a.state.kind === "protocol" ? 0 : 1;
+    const pb = b.state.kind === "protocol" ? 0 : 1;
     if (pa !== pb) return pa - pb;
     if (pa === 0) return 0;
     const na = a._new ? 1 : 0, nb = b._new ? 1 : 0;
@@ -2240,7 +2263,7 @@ function dupCard(id) {
 
 async function dlCard(card) {
   const off = document.createElement("canvas");
-  if (card.state.kind === "compile") await renderCompileLandscape(card.state, "front", off, true, exportScale);
+  if (card.state.kind === "protocol") await renderCompileLandscape(card.state, "front", off, true, exportScale);
   else await renderCard(card.state, off, true, exportScale);
   downloadCanvas(toPoker(off, exportScale), safeName(deckShared.title || card.state.value || "card") + ".png");
 }
@@ -2424,7 +2447,8 @@ function loadSavedDeck(id) {
 // one first if the deck is empty (e.g. a brand-new or just-cleared deck).
 async function editProtocolCard() {
   if (!deck.length) {
-    const snap = blankCardState();
+    // A brand-new / just-cleared deck starts on the Protocol card (landscape) by default.
+    const snap = Object.assign(blankCardState(), { kind: "protocol" });
     deck.push({ id: newId(), state: snap, thumb: await makeThumb(snap) });
     saveDeck();
   }
@@ -2508,7 +2532,7 @@ async function buildSharePayload(name, totalBudget) {
   if (perCard) for (const c of deck) {
     const s = c.state;
     if (s.bgOwn && s.bgOwn.type === "custom" && s.bgOwn.dataUrl) want(s.bgOwn.dataUrl, "bg");
-    if (s.kind === "compile" && s.bgOwnBack && s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) want(s.bgOwnBack.dataUrl, "bg");
+    if (s.kind === "protocol" && s.bgOwnBack && s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) want(s.bgOwnBack.dataUrl, "bg");
   }
   // 2) Budget the image bytes. The caller (btnExport) tunes `totalBudget` so the
   //    url-encoded POST body lands just under dpaste's hard limit. Logos are tiny
@@ -2550,14 +2574,28 @@ async function buildSharePayload(name, totalBudget) {
       if (s.bgOwn.type === "custom" && s.bgOwn.dataUrl) cb.img = ref(s.bgOwn.dataUrl);
       card.bg = cb;
     }
-    if (perCard && s.kind === "compile" && s.bgOwnBack) { // separate back-face bg
+    if (perCard && s.kind === "protocol" && s.bgOwnBack) { // separate back-face bg
       const cbb = { type: s.bgOwnBack.type, name: s.bgOwnBack.name, transform: s.bgOwnBack.transform };
       if (s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) cbb.img = ref(s.bgOwnBack.dataUrl);
       card.bgBack = cbb;
     }
     cards.push(card);
   }
-  return { v: 3, name, title: deckShared.title, code: deckShared.code || "", perCardBg: perCard, glitchPreset: deckShared.glitchPreset || 0, imgs, cards, shared };
+  // Emit in the LEGACY kind format so old and new links read uniformly.
+  return flipPayloadKinds({ v: 3, name, title: deckShared.title, code: deckShared.code || "", perCardBg: perCard, glitchPreset: deckShared.glitchPreset || 0, imgs, cards, shared });
+}
+// Flip kinds in a share/export payload (handles flat cards[].kind, wrapped
+// cards[].state.kind, a raw card array, and shared.{protocol,compile}).
+function flipPayloadKinds(p) {
+  if (!p) return p;
+  if (p.shared) flipSharedKeys(p.shared);
+  const cards = Array.isArray(p) ? p : (p.cards || []);
+  cards.forEach((c) => {
+    if (!c) return;
+    if (typeof c.kind === "string") c.kind = flipKind(c.kind);
+    if (c.state && typeof c.state.kind === "string") c.state.kind = flipKind(c.state.kind);
+  });
+  return p;
 }
 
 const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
@@ -2617,8 +2655,8 @@ el("btnExport").addEventListener("click", async () => {
 // Order: the Protocol card (landscape) first, then the rest by value ascending.
 function sortDeckStates(states) {
   return states.slice().sort((a, b) => {
-    const pa = a.kind === "compile" ? 0 : 1; // kind "compile" = landscape = the "Protocol card"
-    const pb = b.kind === "compile" ? 0 : 1;
+    const pa = a.kind === "protocol" ? 0 : 1; // kind "protocol" = landscape = the "Protocol card"
+    const pb = b.kind === "protocol" ? 0 : 1;
     if (pa !== pb) return pa - pb;
     if (pa === 0) return 0;
     return (parseFloat(a.value) || 0) - (parseFloat(b.value) || 0);
@@ -2647,6 +2685,7 @@ async function checkSharedDeck() {
       data = JSON.parse(json);
     }
   } catch (e) { console.warn("Shared deck load failed:", e); el("shareView").hidden = true; alert("This shared deck could not be loaded (the link may be invalid or expired)."); return; }
+  flipPayloadKinds(data); // legacy share format → coherent in-memory kinds
   const name = (data && data.name) || "Shared deck";
   const imgs = (data && Array.isArray(data.imgs)) ? data.imgs : [];
   let states, expandedShared = null;
@@ -2663,7 +2702,7 @@ async function checkSharedDeck() {
     };
     states = (data.cards || []).map((card) => {
       const st = normalizeState(card);
-      const k = st.kind === "compile" ? "compile" : "protocol";
+      const k = st.kind === "protocol" ? "protocol" : "compile"; // shared key matches the card's kind
       st._shared = { title: expandedShared.title, code, perCardBg, glitchPreset, bg: expandedShared[k].bg, logo: expandedShared[k].logo };
       if (card.bg) { // per-card background (perCardBg mode)
         const bg = Object.assign(defaultBg(), card.bg);
@@ -2724,7 +2763,7 @@ async function renderFrontImage(st, side) {
   const off = document.createElement("canvas");
   // Render at 2× with the high-quality downscale so the gallery looks crisp on
   // hi-dpi screens (it's shown large, especially the Protocol card).
-  if (st.kind === "compile") await renderCompileLandscape(st, side || "front", off, true, 2);
+  if (st.kind === "protocol") await renderCompileLandscape(st, side || "front", off, true, 2);
   else await renderCard(st, off, true, 2);
   return off.toDataURL("image/jpeg", 0.92);
 }
@@ -2753,7 +2792,7 @@ async function openShareView(name, states) {
   };
   const proto = [], values = [];
   for (const st of sorted) {
-    if (st.kind === "compile") { proto.push(await faceHtml(st, "front")); proto.push(await faceHtml(st, "back")); }
+    if (st.kind === "protocol") { proto.push(await faceHtml(st, "front")); proto.push(await faceHtml(st, "back")); }
     else values.push(await valueHtml(st));
   }
   let html = "";
@@ -2813,7 +2852,7 @@ el("btnDownloadAll").addEventListener("click", async () => {
   for (let i = 0; i < deck.length; i++) {
     btn.textContent = `${i + 1}/${deck.length}…`;
     const off = document.createElement("canvas");
-    if (deck[i].state.kind === "compile") await renderCompileLandscape(deck[i].state, "front", off, true, exportScale);
+    if (deck[i].state.kind === "protocol") await renderCompileLandscape(deck[i].state, "front", off, true, exportScale);
     else await renderCard(deck[i].state, off, true, exportScale);
     downloadCanvas(toPoker(off, exportScale), String(i + 1).padStart(2, "0") + "_" + safeName(deckShared.title || "card") + ".png");
     await new Promise((r) => setTimeout(r, 350)); // let the browser process each download
@@ -2881,7 +2920,7 @@ el("btnExportPDF").addEventListener("click", async () => {
     const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
     const back = await getCardBackPng();
     // Value cards first (they tile into the mosaic on the page), then the Protocol card.
-    const ordered = [...valueCards(), ...deck.filter((c) => c.state.kind === "compile")];
+    const ordered = [...valueCards(), ...deck.filter((c) => c.state.kind === "protocol")];
     const pages = Math.ceil(ordered.length / per);
     let firstPage = true;
     for (let p = 0; p < pages; p++) {
@@ -2893,7 +2932,7 @@ el("btnExportPDF").addEventListener("click", async () => {
       for (let i = 0; i < chunk.length; i++) {
         btn.textContent = `${p * per + i + 1}/${ordered.length}…`;
         const st = chunk[i].state;
-        const url = st.kind === "compile" ? await renderCompileVerticalJpeg(st, "front") : await renderToJpeg(st);
+        const url = st.kind === "protocol" ? await renderCompileVerticalJpeg(st, "front") : await renderToJpeg(st);
         pdf.addImage(url, "JPEG", mx + (i % cols) * W, my + Math.floor(i / cols) * H, W, H);
       }
       // backs: one per front only (saves ink), mirrored horizontally so they line up
@@ -2905,7 +2944,7 @@ el("btnExportPDF").addEventListener("click", async () => {
         const st = chunk[i].state;
         const col = cols - 1 - (i % cols); // mirror column for long-edge duplex flip
         const row = Math.floor(i / cols);
-        if (st.kind === "compile") {
+        if (st.kind === "protocol") {
           const burl = await renderCompileVerticalJpeg(st, "back");
           pdf.addImage(burl, "JPEG", mx + col * W, my + row * H, W, H);
         } else {
@@ -2936,6 +2975,7 @@ el("btnExportDeck").addEventListener("click", () => {
     shared: dehydrateToDict(JSON.parse(JSON.stringify(deckShared)), imgs),
     imgs,
   };
+  flipPayloadKinds(payload); // write in the legacy kind format (matches share + old files)
   const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -2984,6 +3024,7 @@ el("inImportDeck").addEventListener("change", (e) => {
           shared: data.shared ? rehydrateFromDict(data.shared, data.imgs) : data.shared,
         });
       }
+      flipPayloadKinds(data); // legacy file kind format → coherent in-memory kinds
       const cards = Array.isArray(data) ? data : data.cards;
       if (!Array.isArray(cards)) throw new Error("Invalid format");
       const replace = deck.length === 0 || confirm("Replace the current deck? (Cancel = append to the end)");
