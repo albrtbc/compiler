@@ -610,6 +610,12 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
   opacity: 0; transition: opacity 0.15s;
 }
 .sg-values .sg-card:hover .sg-label { opacity: 1; }
+/* On mobile the 3-wide mosaic is too cramped — show the value cards one per row,
+   spaced out, with labels always visible (no hover on touch). */
+@media (max-width: 720px) {
+  .sg-values { grid-template-columns: 1fr; gap: 14px; max-width: 460px; }
+  .sg-values .sg-card .sg-label { opacity: 1; }
+}
 .share-grid .sg-card {
   background: var(--panel);
   border: 1px solid var(--line);
