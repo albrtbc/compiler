@@ -869,8 +869,10 @@ const BACK_IDS = ["inTitleBack", "inCBack"];
 // match drawSideCode; len/thick are the (pre-rotation) box the input occupies.
 // Only on the vertical "Compile card" (kind="protocol"); not on the landscape card.
 const CODE_ZONE = {
-  // Matches drawSideCode (x:695, y:475, condense:1.72): band center ≈ (694, 558), run ≈146px tall.
-  protocol: { cx: 694, cy: 558, len: 152, thick: 34, size: 24, font: "SupermolotB" },
+  // Matches drawSideCode (x:695, y:475, size:24, letterSpacing:5, condense:1.72):
+  // band center ≈ (694, 558). len/letterSpacing are PRE-scaleX (the transform
+  // stretches the run by `condense`), so the caret tracks the rendered glyphs.
+  protocol: { cx: 694, cy: 558, len: 95, thick: 34, size: 24, font: "SupermolotB", letterSpacing: 5, condense: 1.72 },
 };
 function layoutCodeField(inputId, z, scale) {
   const e = el(inputId);
@@ -881,9 +883,14 @@ function layoutCodeField(inputId, z, scale) {
   e.style.height = h + "px";
   e.style.left = (z.cx * scale - w / 2) + "px";
   e.style.top = (z.cy * scale - h / 2) + "px";
-  e.style.transform = "rotate(-90deg)"; // reads bottom-to-top, like drawSideCode
+  // Match drawSideCode exactly so the (invisible) text + caret line up with the
+  // rendered glyphs: rotate, stretch the run by `condense` (scaleX), and apply the
+  // same letter-spacing. Without these the caret ignores the spacing/stretch.
+  const cond = z.condense || 1;
+  e.style.transform = "rotate(-90deg)" + (cond !== 1 ? " scaleX(" + cond + ")" : "");
   e.style.fontFamily = z.font;
   e.style.fontSize = z.size * scale + "px";
+  e.style.letterSpacing = ((z.letterSpacing || 0) * scale) + "px";
   e.style.lineHeight = h + "px";
 }
 
