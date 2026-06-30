@@ -80,6 +80,9 @@ const defaultState = () => ({
   bg: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
   logo: { dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 }, // always tinted white
   kind: "protocol", // "protocol" | "compile"
+  // Per-card background data, used only when the deck-wide `perCardBg` mode is on;
+  // otherwise the card renders the shared bg and bgOwn is ignored / not persisted.
+  bgOwn: { type: "none", name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } },
   compile: defaultCompile(),
 });
 
@@ -96,6 +99,8 @@ const defaultLogo = () => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
 // title is shared across the WHOLE deck (both kinds); bg + logo are shared per kind.
 let deckShared = {
   title: "",
+  perCardBg: false,   // deck-wide: when on, each card renders its own bgOwn instead of the shared bg
+  frontGlitch: false, // deck-wide: glitch the background of every card's front face
   protocol: { bg: defaultBg(), logo: defaultLogo() },
   compile: { bg: defaultBg(), logo: defaultLogo() },
 };
@@ -104,9 +109,13 @@ function sharedFor(kind) { return deckShared[kind === "compile" ? "compile" : "p
 // in. `st._shared` (={title,bg,logo}) overrides the global deck props — used to
 // render a foreign deck in the share gallery without touching the viewer's deck.
 function mergeShared(st) {
-  if (st._shared) return Object.assign({}, st, { title: st._shared.title, bg: st._shared.bg, logo: st._shared.logo });
+  if (st._shared) {
+    const ownBg = st._shared.perCardBg ? (st.bgOwn || defaultBg()) : null;
+    return Object.assign({}, st, { title: st._shared.title, bg: ownBg || st._shared.bg, logo: st._shared.logo });
+  }
   const sh = sharedFor(st.kind);
-  return Object.assign({}, st, { title: deckShared.title, bg: sh.bg, logo: sh.logo });
+  const ownBg = deckShared.perCardBg ? (st.bgOwn || defaultBg()) : null; // deck-wide per-card mode
+  return Object.assign({}, st, { title: deckShared.title, bg: ownBg || sh.bg, logo: sh.logo });
 }
 
 let state = null;
@@ -118,6 +127,9 @@ let deckDirty = false;
 // Snapshot of the last saved/baseline working state (deck + shared props + meta),
 // restored when the user presses Cancel to discard all pending changes.
 let revertSnapshot = null;
+// Which face of a compile card the background controls edit (per-card mode only):
+// "front" → bgOwn, "back" → bgOwnBack. A compile card can have a different bg per face.
+let bgEditSide = "front";
 // state.title / state.bg / state.logo are live views of the shared props, so the
 // existing controls edit the deck-wide title and per-kind bg/logo directly.
 function setState(obj) {
@@ -129,8 +141,16 @@ function setState(obj) {
   });
   Object.defineProperty(state, "bg", {
     enumerable: true, configurable: true,
-    get() { return sharedFor(state.kind).bg; },
-    set(v) { sharedFor(state.kind).bg = v; },
+    get() {
+      if (!deckShared.perCardBg) return sharedFor(state.kind).bg;
+      if (state.kind === "compile" && bgEditSide === "back") return state.bgOwnBack || state.bgOwn;
+      return state.bgOwn;
+    },
+    set(v) {
+      if (!deckShared.perCardBg) { sharedFor(state.kind).bg = v; return; }
+      if (state.kind === "compile" && bgEditSide === "back") state.bgOwnBack = v;
+      else state.bgOwn = v;
+    },
   });
   Object.defineProperty(state, "logo", {
     enumerable: true, configurable: true,
@@ -145,7 +165,8 @@ setState(defaultState());
 // from deckShared at render time (de-duplicated, never copied per card).
 function cardSnapshot(st) {
   const snap = JSON.parse(JSON.stringify(st));
-  delete snap.title; delete snap.bg; delete snap.logo;
+  delete snap.title; delete snap.bg; delete snap.logo; delete snap.customBg;
+  if (!deckShared.perCardBg) { delete snap.bgOwn; delete snap.bgOwnBack; } // per-card bgs only in per-card mode
   return snap;
 }
 
@@ -459,6 +480,77 @@ function drawBackground(ctx, img, t, dw = CARD_W, dh = CARD_H) {
   ctx.drawImage(img, x, y, w, h);
 }
 
+/* ---------------- Front "glitch" effect ---------------- */
+// Small deterministic PRNG so each card's glitch is stable across re-renders.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+// A seed that's stable per card but varies between cards.
+function glitchSeed(st) { return (st.value || "") + "|" + st.kind + "|" + (st.title || ""); }
+// Datamosh-style block glitch: lay displaced rectangular shards over the just-drawn
+// background, plus a few bright shifted slices for a chromatic fringe. Run AFTER the
+// background and BEFORE the frame/panels/text, so only the bg is glitched.
+function applyFrontGlitch(ctx, w, h, seedStr) {
+  const rnd = mulberry32(hashStr(seedStr || "glitch"));
+  const off = document.createElement("canvas");
+  off.width = w; off.height = h;
+  off.getContext("2d").drawImage(ctx.canvas, 0, 0);
+
+  // 1) Displaced horizontal shards (the base glitch).
+  let y = 0;
+  while (y < h) {
+    const rh = h * (0.025 + rnd() * 0.085);
+    let x = 0;
+    while (x < w) {
+      const rw = w * (0.05 + rnd() * 0.20);
+      const cw = Math.min(rw, w - x), ch = Math.min(rh, h - y);
+      if (rnd() < 0.55) {
+        const dx = (rnd() - 0.5) * w * 0.13;
+        ctx.drawImage(off, x, y, cw, ch, x + dx, y, cw, ch);
+      }
+      x += rw;
+    }
+    y += rh;
+  }
+
+  // 2) Duplicated squares: copy chunks from the original and stamp them, sometimes
+  // several times, at other spots — the repeated/cloned-block look.
+  const dupes = 22;
+  for (let i = 0; i < dupes; i++) {
+    const sz = w * (0.05 + rnd() * 0.13);
+    const sw = Math.min(sz, w), sh = Math.min(sz, h);
+    const sx = rnd() * (w - sw), sy = rnd() * (h - sh);
+    const copies = 1 + Math.floor(rnd() * 3);
+    for (let k = 0; k < copies; k++) {
+      // bias copies to roughly the same row so they read as a repeating streak
+      const dx = rnd() * (w - sw);
+      const dy = (rnd() < 0.6) ? sy + (rnd() - 0.5) * h * 0.06 : rnd() * (h - sh);
+      ctx.drawImage(off, sx, sy, sw, sh, dx, Math.max(0, Math.min(h - sh, dy)), sw, sh);
+    }
+  }
+
+  // 3) Bright chromatic slices for a fringe.
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.globalAlpha = 0.4;
+  for (let i = 0; i < 12; i++) {
+    const sy = rnd() * h, sh = h * (0.004 + rnd() * 0.02), dx = (rnd() - 0.5) * w * 0.06;
+    ctx.drawImage(off, 0, sy, w, sh, dx, sy, w, sh);
+  }
+  ctx.restore();
+}
+function frontGlitchOn(st) { return st._shared ? st._shared.frontGlitch : deckShared.frontGlitch; }
+
 /* ---------------- Core render ---------------- */
 let lastBgImg = null; // background image currently shown in the main preview (for cursor-anchored zoom)
 
@@ -482,6 +574,8 @@ async function renderCard(st, cnv) {
     ctx.fillStyle = "#0a0c12";
     ctx.fillRect(0, 0, CARD_W, CARD_H);
   }
+  // NB: the glitch is intentionally NOT applied here — it's only for the Protocol
+  // (landscape) card's front face, handled in renderCompileLandscape.
 
   // 2. Panel backings (only if text present)
   if (st.panelTop.trim() && assets.panels.top) ctx.drawImage(assets.panels.top, 0, 0, CARD_W, CARD_H);
@@ -523,7 +617,10 @@ async function loadBg(st) {
 
 // Render the compile card in landscape (1039×744) — this is what the editor shows.
 async function renderCompileLandscape(st, side, cnv) {
+  const perCard = st._shared ? st._shared.perCardBg : deckShared.perCardBg;
   st = mergeShared(st); // bg + logo come from the per-kind shared props
+  // In per-card mode the back face can carry its own background.
+  if (perCard && side === "back" && st.bgOwnBack) st = Object.assign({}, st, { bg: st.bgOwnBack });
   cnv.width = LAND_W; cnv.height = LAND_H;
   const ctx = cnv.getContext("2d");
   ctx.clearRect(0, 0, LAND_W, LAND_H);
@@ -531,6 +628,8 @@ async function renderCompileLandscape(st, side, cnv) {
   const bgImg = await loadBg(st);
   if (bgImg) drawBackground(ctx, bgImg, st.bg.transform, LAND_W, LAND_H);
   else { ctx.fillStyle = "#0a0c12"; ctx.fillRect(0, 0, LAND_W, LAND_H); }
+  // Only the front face is glitched; the back keeps the clean image.
+  if (side !== "back" && frontGlitchOn(st)) applyFrontGlitch(ctx, LAND_W, LAND_H, glitchSeed(st) + "|front");
 
   const frame = side === "back" ? assets.compileBackLand : assets.compileFrontLand;
   if (frame) ctx.drawImage(frame, 0, 0, LAND_W, LAND_H);
@@ -868,6 +967,14 @@ function normalizeState(s) {
   st.logo = Object.assign({ dataUrl: null, zoom: 1 }, s.logo || {});
   st.kind = s.kind === "compile" ? "compile" : "protocol";
   st.compile = Object.assign(defaultCompile(), s.compile || {});
+  st.bgOwn = Object.assign(defaultBg(), s.bgOwn || {});
+  st.bgOwn.transform = Object.assign(defaultTransform(), st.bgOwn.transform || {});
+  migrateBg(st.bgOwn);
+  if (s.bgOwnBack) { // separate back-face bg (compile cards, per-card mode)
+    st.bgOwnBack = Object.assign(defaultBg(), s.bgOwnBack);
+    st.bgOwnBack.transform = Object.assign(defaultTransform(), st.bgOwnBack.transform || {});
+    migrateBg(st.bgOwnBack);
+  }
   return st;
 }
 
@@ -895,7 +1002,7 @@ function saveDeck() {
 /* ---------------- Shared per-kind logo + background ---------------- */
 function saveShared() { idbSet("deckShared", deckShared).catch((e) => console.warn("saveShared failed", e)); }
 function resetShared() {
-  deckShared = { title: "", protocol: { bg: defaultBg(), logo: defaultLogo() }, compile: { bg: defaultBg(), logo: defaultLogo() } };
+  deckShared = { title: "", perCardBg: false, frontGlitch: false, protocol: { bg: defaultBg(), logo: defaultLogo() }, compile: { bg: defaultBg(), logo: defaultLogo() } };
 }
 // First non-empty title across a set of deck cards (title is deck-wide).
 function titleFromCards(cards) {
@@ -914,6 +1021,8 @@ function normalizeShared(src) {
 function setDeckShared(src) {
   resetShared();
   if (src && typeof src.title === "string") deckShared.title = src.title;
+  if (src && typeof src.perCardBg === "boolean") deckShared.perCardBg = src.perCardBg;
+  if (src && typeof src.frontGlitch === "boolean") deckShared.frontGlitch = src.frontGlitch;
   if (src && src.protocol) deckShared.protocol = normalizeShared(src.protocol);
   if (src && src.compile) deckShared.compile = normalizeShared(src.compile);
 }
@@ -956,6 +1065,12 @@ function propagateShared() {
   clearTimeout(sharedPropTimer);
   sharedPropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(state.kind); }, 250);
 }
+// In per-card mode a background change touches only this card; otherwise it updates
+// the deck-wide shared bg for every card of this kind.
+function propagateBg() {
+  if (deckShared.perCardBg) onCardEdited();
+  else propagateShared();
+}
 // The protocol title is deck-wide → refresh every card's thumbnail.
 let titlePropTimer = null;
 function propagateTitle() {
@@ -991,10 +1106,13 @@ function syncStateToForm() {
   el("inCSub").value = c.subtitle || "";
   el("inCBot").value = c.bottom || "";
   el("inCBack").value = c.back || "";
+  el("inCustomBg").checked = !!deckShared.perCardBg;
+  el("inFrontGlitch").checked = !!deckShared.frontGlitch;
   refreshLogoUI();
   refreshBgSelection();
   syncBgAdjust();
   applyKind();
+  refreshBgSideToggle();
 }
 
 // Show/hide protocol vs compile fields and update the type/side toggles.
@@ -1086,6 +1204,18 @@ function overLogoOn(cnv, e) {
 }
 function clampLogoZoom(z) { return Math.max(0.5, Math.min(3, z)); }
 
+// Interacting with a canvas's background selects that face for editing (compile
+// card, per-card mode): the front canvas → front bg, the back canvas → back bg.
+function selectBgFaceForCanvas(cnv) {
+  if (!deckShared.perCardBg || state.kind !== "compile") return;
+  const side = cnv === canvasBack ? "back" : "front";
+  if (bgEditSide === side) return;
+  bgEditSide = side;
+  refreshBgSideToggle();
+  refreshBgSelection();
+  syncBgAdjust();
+}
+
 // Hold Shift + drag to pan (logo if hovered, else background); Shift + scroll to
 // zoom the same target. Wired on both the front and back canvases.
 let dragging = false, dragTarget = null, dragCanvas = null, lastPX = 0, lastPY = 0;
@@ -1094,6 +1224,7 @@ function attachPanZoom(cnv) {
   cnv.addEventListener("pointerdown", (e) => {
     if (!panZoomKey(e)) return;
     const onLogo = overLogoOn(cnv, e);
+    if (!onLogo) selectBgFaceForCanvas(cnv); // dragging the back canvas edits the back bg
     if (!onLogo && state.bg.type === "none") return; // nothing to drag
     e.preventDefault();
     dragging = true; dragTarget = onLogo ? "logo" : "bg"; dragCanvas = cnv;
@@ -1117,16 +1248,18 @@ function attachPanZoom(cnv) {
   });
   const end = () => {
     if (!dragging || dragCanvas !== cnv) return;
+    const wasLogo = dragTarget === "logo";
     dragging = false; dragTarget = null; dragCanvas = null;
     cnv.classList.remove("grabbing");
     saveCurrent();
-    propagateShared(); // bg/logo moved → update the rest of this kind
+    if (wasLogo) propagateShared(); else propagateBg(); // logo is deck-wide; bg may be per-card
   };
   cnv.addEventListener("pointerup", end);
   cnv.addEventListener("pointercancel", end);
   cnv.addEventListener("wheel", (e) => {
     if (!panZoomKey(e)) return;
     const onLogo = overLogoOn(cnv, e);
+    if (!onLogo) selectBgFaceForCanvas(cnv);
     if (!onLogo && state.bg.type === "none") return;
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -1140,7 +1273,7 @@ function attachPanZoom(cnv) {
     }
     scheduleRender(false);
     debouncedSave();
-    propagateShared();
+    if (onLogo) propagateShared(); else propagateBg();
   }, { passive: false });
 }
 attachPanZoom(canvas);
@@ -1197,6 +1330,7 @@ function setKind(kind) {
   refreshLogoUI();      // logo + background are per-kind shared, reflect the new kind
   refreshBgSelection();
   syncBgAdjust();
+  refreshBgSideToggle();
   scheduleRender();
   onCardEdited();
 }
@@ -1293,7 +1427,7 @@ el("btnNoBg").addEventListener("click", () => {
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
-  propagateShared();
+  propagateBg();
 });
 
 // Zoom slider (zooms around the card centre)
@@ -1302,15 +1436,69 @@ el("inBgZoom").addEventListener("input", () => {
   el("bgZoomVal").textContent = Math.round(bgTransform().scale * 100) + "%";
   scheduleRender(false);
   debouncedSave();
-  propagateShared();
+  propagateBg();
 });
 // Reset pan & zoom
 el("btnBgReset").addEventListener("click", () => {
   state.bg.transform = defaultTransform();
   syncBgAdjust();
   scheduleRender();
-  propagateShared();
+  propagateBg();
 });
+
+// Deck-wide "per-card background" mode toggle. ON → every card gets its own bg,
+// seeded from the current shared bg so nothing changes visually until each card is
+// edited; OFF → all cards fall back to the single shared background.
+el("inCustomBg").addEventListener("change", () => {
+  const on = el("inCustomBg").checked;
+  deckShared.perCardBg = on;
+  if (on) {
+    const seed = (s) => {
+      if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
+      // compile cards get a separate back-face bg, seeded the same so nothing changes yet
+      if (s.kind === "compile" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
+    };
+    seed(state);
+    deck.forEach((c) => seed(c.state));
+  } else {
+    bgEditSide = "front";
+  }
+  commitCurrentCard();   // persist the editor card under the new mode
+  saveShared();
+  refreshBgSideToggle();
+  refreshBgSelection();
+  syncBgAdjust();
+  scheduleRender();
+  markDirty();
+  refreshDeckThumbs(null); // re-render every thumbnail for the new mode
+});
+
+// Deck-wide front "glitch" effect toggle.
+el("inFrontGlitch").addEventListener("change", () => {
+  deckShared.frontGlitch = el("inFrontGlitch").checked;
+  saveShared();
+  scheduleRender();
+  markDirty();
+  refreshDeckThumbs(null); // re-render every thumbnail with/without the glitch
+});
+
+// Front/Back background selector — only shown for the compile (Protocol) card in
+// per-card mode, since that card has two faces that can each have their own bg.
+function refreshBgSideToggle() {
+  const show = state.kind === "compile" && deckShared.perCardBg;
+  el("bgSideToggle").hidden = !show;
+  if (!show) bgEditSide = "front";
+  el("btnBgFront").classList.toggle("active", bgEditSide === "front");
+  el("btnBgBack").classList.toggle("active", bgEditSide === "back");
+}
+function setBgEditSide(side) {
+  bgEditSide = side === "back" ? "back" : "front";
+  refreshBgSideToggle();
+  refreshBgSelection(); // reflect the selected face's bg in the picker + zoom
+  syncBgAdjust();
+}
+el("btnBgFront").addEventListener("click", () => setBgEditSide("front"));
+el("btnBgBack").addEventListener("click", () => setBgEditSide("back"));
 
 // Background grid: uploaded customs first, then the bundled presets.
 let customBgs = [];
@@ -1319,7 +1507,7 @@ function selectBg(bg) {
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
-  propagateShared();
+  propagateBg();
 }
 function buildBgGrid() {
   const grid = el("bgGrid");
@@ -1678,9 +1866,11 @@ function deckBgSrc(d) {
       if (src) return src;
     }
   }
-  // Old model: per-card background.
+  // Per-card backgrounds (perCardBg mode), then the old per-card model.
+  const usePer = !!(d.shared && d.shared.perCardBg);
   for (const c of d.cards || []) {
-    const src = fromBg(c.state && c.state.bg);
+    const st = c.state || {};
+    const src = fromBg(usePer ? st.bgOwn : st.bg);
     if (src) return src;
   }
   return null;
@@ -1881,11 +2071,26 @@ async function buildSharePayload(name) {
     if (sh.logo.dataUrl) logo.img = await ref(sh.logo.dataUrl, "logo");
     shared[kind] = { bg, logo };
   }
-  const cards = deck.map((c) => {
+  // Sequential (not Promise.all) so the dedupe cache in ref() actually hits: a bg
+  // reused across cards is then stored ONCE in the pool, keeping the link small.
+  const perCard = !!deckShared.perCardBg;
+  const cards = [];
+  for (const c of deck) {
     const s = c.state;
-    return { value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot, kind: s.kind, compile: s.compile };
-  });
-  return { v: 3, name, title: deckShared.title, imgs, cards, shared };
+    const card = { value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot, kind: s.kind, compile: s.compile };
+    if (perCard && s.bgOwn) {
+      const cb = { type: s.bgOwn.type, name: s.bgOwn.name, transform: s.bgOwn.transform };
+      if (s.bgOwn.type === "custom" && s.bgOwn.dataUrl) cb.img = await ref(s.bgOwn.dataUrl, "bg");
+      card.bg = cb;
+    }
+    if (perCard && s.kind === "compile" && s.bgOwnBack) { // separate back-face bg
+      const cbb = { type: s.bgOwnBack.type, name: s.bgOwnBack.name, transform: s.bgOwnBack.transform };
+      if (s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) cbb.img = await ref(s.bgOwnBack.dataUrl, "bg");
+      card.bgBack = cbb;
+    }
+    cards.push(card);
+  }
+  return { v: 3, name, title: deckShared.title, perCardBg: perCard, frontGlitch: !!deckShared.frontGlitch, imgs, cards, shared };
 }
 
 const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
@@ -1961,15 +2166,32 @@ async function checkSharedDeck() {
   let states, expandedShared = null;
   if (data && data.v === 3 && data.shared) {
     // v3: deck-wide title + per-kind shared logo/background stored once.
+    const perCardBg = !!data.perCardBg;
+    const frontGlitch = !!data.frontGlitch;
     expandedShared = {
       title: data.title || data.name || "",
+      perCardBg, frontGlitch,
       protocol: expandShareImgs(data.shared.protocol, imgs),
       compile: expandShareImgs(data.shared.compile, imgs),
     };
     states = (data.cards || []).map((card) => {
       const st = normalizeState(card);
       const k = st.kind === "compile" ? "compile" : "protocol";
-      st._shared = { title: expandedShared.title, bg: expandedShared[k].bg, logo: expandedShared[k].logo };
+      st._shared = { title: expandedShared.title, perCardBg, frontGlitch, bg: expandedShared[k].bg, logo: expandedShared[k].logo };
+      if (card.bg) { // per-card background (perCardBg mode)
+        const bg = Object.assign(defaultBg(), card.bg);
+        bg.transform = Object.assign(defaultTransform(), card.bg.transform || {});
+        if (typeof card.bg.img === "number") bg.dataUrl = imgs[card.bg.img];
+        migrateBg(bg); delete bg.img;
+        st.bgOwn = bg;
+      }
+      if (card.bgBack) { // separate back-face bg
+        const bg = Object.assign(defaultBg(), card.bgBack);
+        bg.transform = Object.assign(defaultTransform(), card.bgBack.transform || {});
+        if (typeof card.bgBack.img === "number") bg.dataUrl = imgs[card.bgBack.img];
+        migrateBg(bg); delete bg.img;
+        st.bgOwnBack = bg;
+      }
       return st;
     });
   } else if (data && data.v === 2 && Array.isArray(data.imgs)) {
@@ -2009,10 +2231,11 @@ function showShareLoading() {
   el("shareView").hidden = false;
 }
 
-// Full-resolution front image (crisp when shown large in the share gallery).
-async function renderFrontImage(st) {
+// Full-resolution card image (crisp when shown large in the share gallery). For a
+// compile/Protocol card `side` picks the face ("front" | "back").
+async function renderFrontImage(st, side) {
   const off = document.createElement("canvas");
-  if (st.kind === "compile") await renderCompileLandscape(st, "front", off);
+  if (st.kind === "compile") await renderCompileLandscape(st, side || "front", off);
   else { off.width = CARD_W; off.height = CARD_H; await renderCard(st, off); }
   return off.toDataURL("image/jpeg", 0.9);
 }
@@ -2025,16 +2248,25 @@ async function openShareView(name, states) {
   el("shareView").hidden = false;
   // keep the big centered loader visible while we render the card images
   const sorted = sortDeckStates(states);
-  const cardHtml = async (st) => {
+  // A Protocol card (landscape) is shown as both faces, centered.
+  const faceHtml = async (st, side) => {
+    let url = "";
+    try { url = await renderFrontImage(st, side); } catch (e) {}
+    return `<div class="sg-card sg-landscape"><img src="${url}" alt=""><span class="sg-label">${side === "back" ? "BACK" : "FRONT"}</span></div>`;
+  };
+  // Value cards tile into a 3-wide mosaic (their backgrounds line up edge to edge).
+  const valueHtml = async (st) => {
     let url = "";
     try { url = await renderFrontImage(st); } catch (e) {}
-    const isProtocol = st.kind === "compile";
     const stitle = (st._shared && st._shared.title) || st.title || "—";
-    const label = isProtocol ? "PROTOCOL" : (String(st.value).trim() ? "VALUE " + st.value : stitle);
-    return `<div class="sg-card${isProtocol ? " sg-landscape" : ""}"><img src="${url}" alt=""><span class="sg-label">${escapeHtml(label)}</span></div>`;
+    const label = String(st.value).trim() ? "VALUE " + st.value : stitle;
+    return `<div class="sg-card"><img src="${url}" alt=""><span class="sg-label">${escapeHtml(label)}</span></div>`;
   };
   const proto = [], values = [];
-  for (const st of sorted) (st.kind === "compile" ? proto : values).push(await cardHtml(st));
+  for (const st of sorted) {
+    if (st.kind === "compile") { proto.push(await faceHtml(st, "front")); proto.push(await faceHtml(st, "back")); }
+    else values.push(await valueHtml(st));
+  }
   let html = "";
   if (proto.length) html += `<div class="sg-protocol">${proto.join("")}</div>`;
   if (values.length) html += `<div class="sg-values">${values.join("")}</div>`;

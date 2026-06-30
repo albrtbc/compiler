@@ -275,6 +275,39 @@ code {
 .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); flex: 1; }
 
 /* ===== Background picker ===== */
+/* Toggle switch (modern on/off control), themed to match the segmented toggles.
+   `label.switch` beats `.field > label` (same specificity, declared later) so the
+   field-label block/uppercase styles don't leak in and break the flex layout. */
+label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px 0 12px; cursor: pointer; user-select: none; text-transform: none; font-weight: 400; letter-spacing: normal; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-slider {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  transition: background 0.18s, border-color 0.18s;
+}
+.switch-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.18s, background 0.18s;
+}
+.switch input:checked + .switch-slider { background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%); border-color: transparent; }
+.switch input:checked + .switch-slider::after { transform: translateX(16px); background: #04212a; }
+.switch input:focus-visible + .switch-slider { box-shadow: 0 0 0 2px rgba(65, 224, 208, 0.45); }
+.switch-text { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: normal; transition: color 0.15s; }
+.bg-side { max-width: 220px; margin-bottom: 12px; } /* Front/Back bg selector for the compile card */
+.switch:hover .switch-text { color: var(--text); }
+.switch:hover input:not(:checked) + .switch-slider { border-color: var(--accent-2); }
 .bg-tools { display: flex; gap: 10px; margin-bottom: 12px; }
 .bg-grid {
   display: grid;
@@ -561,10 +594,22 @@ code {
 .sg-protocol .sg-card { width: min(620px, 100%); }   /* landscape card at a generous size */
 .sg-values {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 22px;
+  grid-template-columns: repeat(3, 1fr); /* 3-wide mosaic (3×2 for six value cards) */
+  gap: 0;                                 /* edge to edge so the backgrounds tile */
   align-content: start;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
 }
+.sg-values .sg-card { background: none; border: none; border-radius: 0; padding: 0; gap: 0; position: relative; }
+.sg-values .sg-card img { border-radius: 0; }
+.sg-values .sg-card .sg-label {
+  position: absolute; top: 6px; left: 6px;
+  background: rgba(0, 0, 0, 0.55); color: var(--text);
+  padding: 2px 7px; border-radius: 4px;
+  opacity: 0; transition: opacity 0.15s;
+}
+.sg-values .sg-card:hover .sg-label { opacity: 1; }
 .share-grid .sg-card {
   background: var(--panel);
   border: 1px solid var(--line);

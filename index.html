@@ -74,6 +74,20 @@
 
       <div class="field">
         <label>Card background</label>
+        <label class="switch" title="By default every card shares one deck background. Turn this on (deck-wide) to give each card its own background.">
+          <input id="inCustomBg" type="checkbox" />
+          <span class="switch-slider"></span>
+          <span class="switch-text">Different background per card</span>
+        </label>
+        <label class="switch" title="Apply a datamosh-style block glitch to the Protocol card's front face (its back face stays clean). Only affects the Protocol card.">
+          <input id="inFrontGlitch" type="checkbox" />
+          <span class="switch-slider"></span>
+          <span class="switch-text">Glitch effect on front</span>
+        </label>
+        <div id="bgSideToggle" class="type-toggle bg-side" hidden>
+          <button id="btnBgFront" class="seg-btn active" type="button">Front bg</button>
+          <button id="btnBgBack" class="seg-btn" type="button">Back bg</button>
+        </div>
         <div class="bg-tools">
           <label class="btn btn-file">
             Upload background
