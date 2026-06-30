@@ -215,6 +215,49 @@ function normalizeImage(dataUrl, maxW, maxH, mime, quality) {
   });
 }
 
+// Bytes carried by a dataURL's base64 body (≈ what it costs in the share link).
+function dataUrlBytes(u) { const i = u.indexOf(","); return Math.ceil((u.length - i - 1) * 0.75); }
+
+// Encode an image for the share link: stepped high-quality downscale, then JPEG
+// (or PNG for logos) with quality/size lowered only as needed to fit `budgetBytes`.
+// The share transport (dpaste) caps the whole payload at <1 MB, so we spend that
+// budget on the FEW pooled images instead of crushing everything to 720px.
+function encodeForShare(dataUrl, maxDim, budgetBytes, mime, isLogo) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const longSide = Math.max(img.width, img.height);
+      const encode = (targetLong, q) => {
+        const scale = Math.min(1, targetLong / longSide);
+        const tw = Math.max(1, Math.round(img.width * scale));
+        const th = Math.max(1, Math.round(img.height * scale));
+        const src = hqDownscaled(img, tw); // pre-stepped so the final draw is ~1:1 → crisp
+        const c = document.createElement("canvas"); c.width = tw; c.height = th;
+        const cx = c.getContext("2d"); cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = "high";
+        cx.drawImage(src, 0, 0, tw, th);
+        return c.toDataURL(mime, q);
+      };
+      let dim = Math.min(maxDim, longSide);
+      if (isLogo) { resolve(encode(dim, 1)); return; } // small PNG, no need to tune
+      // Spend the budget on the LARGEST size that still fits at decent quality:
+      // at each size try quality high→low and take the first that fits; only shrink
+      // the image if even q=0.6 won't fit. Keeps resolution and avoids muddy q=0.5.
+      let best = null;
+      for (let i = 0; i < 8 && dim >= 600; i++) {
+        for (const q of [0.9, 0.84, 0.78, 0.72, 0.66, 0.6]) {
+          const out = encode(dim, q);
+          if (dataUrlBytes(out) <= budgetBytes) { best = out; break; }
+        }
+        if (best) break;
+        dim = Math.round(dim * 0.85);
+      }
+      resolve(best || encode(Math.max(600, dim), 0.5));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 async function getImageFromDataUrl(dataUrl) {
   if (!dataUrl) return null;
   if (dataUrlCache.has(dataUrl)) return dataUrlCache.get(dataUrl);
@@ -679,8 +722,10 @@ async function renderCard(st, cnv, hq = false, scale = 1) {
     } catch (e) { /* ignore */ }
   }
 
-  // 6. Set code: right edge, top aligned with the top of the mid panel box, rotated.
-  drawSideCode(ctx, deckCode(st), { x: 716, y: ZONES.panels.mid.y, size: 27, vertical: true, font: "SupermolotB", letterSpacing: 4, condense: 0.8, topAnchor: true });
+  // 6. Set code: right edge box, top anchored to the frame's white divider line,
+  //    glyphs squished vertically (low condense) with letterSpacing bumped to keep
+  //    the gaps the same. condense scales the run (vertical) only; size = horizontal.
+  drawSideCode(ctx, deckCode(st), { x: 695, y: 475, size: 24, vertical: true, font: "SupermolotB", letterSpacing: 5, condense: 1.72, topAnchor: true });
 }
 
 /* ---------------- Compile card render (landscape) ---------------- */
@@ -824,7 +869,8 @@ const BACK_IDS = ["inTitleBack", "inCBack"];
 // match drawSideCode; len/thick are the (pre-rotation) box the input occupies.
 // Only on the vertical "Compile card" (kind="protocol"); not on the landscape card.
 const CODE_ZONE = {
-  protocol: { cx: 714, cy: 593, len: 170, thick: 44, size: 27, font: "SupermolotB" },
+  // Matches drawSideCode (x:695, y:475, condense:1.72): band center ≈ (694, 558), run ≈146px tall.
+  protocol: { cx: 694, cy: 558, len: 152, thick: 34, size: 24, font: "SupermolotB" },
 };
 function layoutCodeField(inputId, z, scale) {
   const e = el(inputId);
@@ -1103,6 +1149,31 @@ async function rehydrateImages(obj) {
     if (typeof obj.img === "string") { obj.dataUrl = await poolGet(obj.img); delete obj.img; return obj; }
     for (const k of Object.keys(obj)) obj[k] = await rehydrateImages(obj[k]);
     return obj;
+  }
+  return obj;
+}
+// Portable lossless pooling for the Export FILE: swap inline {dataUrl:"data:..."}
+// for {img:"<key>"} and collect the ORIGINAL full-res images (no re-encode) into an
+// embedded dict, so an image reused across cards (e.g. a mosaic source) is stored
+// ONCE — full quality, but the file isn't bloated by N duplicate copies.
+function dehydrateToDict(obj, dict) {
+  if (Array.isArray(obj)) return obj.map((v) => dehydrateToDict(v, dict));
+  if (obj && typeof obj === "object") {
+    if (typeof obj.dataUrl === "string" && obj.dataUrl.startsWith("data:")) {
+      const key = imgKey(obj.dataUrl); dict[key] = obj.dataUrl;
+      const o = Object.assign({}, obj); o.img = key; delete o.dataUrl; return o;
+    }
+    const o = {}; for (const k of Object.keys(obj)) o[k] = dehydrateToDict(obj[k], dict); return o;
+  }
+  return obj;
+}
+function rehydrateFromDict(obj, dict) {
+  if (Array.isArray(obj)) return obj.map((v) => rehydrateFromDict(v, dict));
+  if (obj && typeof obj === "object") {
+    if (typeof obj.img === "string" && dict && dict[obj.img]) {
+      const o = Object.assign({}, obj); o.dataUrl = dict[obj.img]; delete o.img; return o;
+    }
+    const o = {}; for (const k of Object.keys(obj)) o[k] = rehydrateFromDict(obj[k], dict); return o;
   }
   return obj;
 }
@@ -2151,8 +2222,8 @@ let modalResolve = null;
 function showModal(opts) {
   const o = Object.assign({ title: "", body: "", confirmLabel: "OK", cancelLabel: "Cancel", danger: false, input: false, value: "", readonly: false }, opts);
   el("modalTitle").textContent = o.title;
-  el("modalBody").textContent = o.body;
-  el("modalBody").hidden = !o.body;
+  if (o.bodyHtml != null) { el("modalBody").innerHTML = o.bodyHtml; el("modalBody").hidden = !o.bodyHtml; }
+  else { el("modalBody").textContent = o.body; el("modalBody").hidden = !o.body; }
   const inp = el("modalInput");
   inp.hidden = !o.input;
   if (o.input) { inp.value = o.value; inp.readOnly = !!o.readonly; }
@@ -2393,45 +2464,67 @@ function expandShareImgs(entry, imgs) {
 // Build a compact share payload: uploaded images are stored ONCE in a pool and
 // referenced by index (the per-kind shared logo/background dedupe naturally), and
 // they're re-encoded smaller so the link fits in a URL. Thumbnails/ids are dropped.
-async function buildSharePayload(name) {
-  const imgs = [];
-  const cache = new Map(); // original dataUrl -> pool index
-  async function ref(url, kind) {
-    if (!url) return undefined;
-    if (cache.has(url)) return cache.get(url);
-    let small = url;
-    try {
-      small = kind === "logo"
-        ? await normalizeImage(url, 256, 256, "image/png")
-        : await normalizeImage(url, 720, 1010, "image/jpeg", 0.8);
-    } catch (e) {}
-    const i = imgs.length; imgs.push(small); cache.set(url, i); return i;
+async function buildSharePayload(name, totalBudget) {
+  const perCard = !!deckShared.perCardBg;
+  // 1) Collect the DISTINCT image URLs first (the per-kind shared bg/logo and, in
+  //    per-card mode, each card's own bg dedupe naturally — a single mosaic source
+  //    is one entry shared by all 6 cells). This lets us split the link's byte
+  //    budget across however few images there actually are.
+  const order = []; const idx = new Map();
+  const want = (url, kind) => { if (!url || idx.has(url)) return; idx.set(url, order.length); order.push({ url, kind }); };
+  for (const kind of ["protocol", "compile"]) {
+    const sh = deckShared[kind];
+    if (sh.bg.type === "custom" && sh.bg.dataUrl) want(sh.bg.dataUrl, "bg");
+    if (sh.logo.dataUrl) want(sh.logo.dataUrl, "logo");
   }
+  if (perCard) for (const c of deck) {
+    const s = c.state;
+    if (s.bgOwn && s.bgOwn.type === "custom" && s.bgOwn.dataUrl) want(s.bgOwn.dataUrl, "bg");
+    if (s.kind === "compile" && s.bgOwnBack && s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) want(s.bgOwnBack.dataUrl, "bg");
+  }
+  // 2) Budget the image bytes. The caller (btnExport) tunes `totalBudget` so the
+  //    url-encoded POST body lands just under dpaste's hard limit. Logos are tiny
+  //    PNGs (reserved only if present); the rest is split among the backgrounds —
+  //    so a single mosaic source gets the WHOLE budget = max quality.
+  const TOTAL = totalBudget || 350 * 1024;
+  const bgCount = order.filter((o) => o.kind === "bg").length;
+  const logoCount = order.length - bgCount;
+  const logoReserve = Math.min(logoCount * 45 * 1024, Math.floor(TOTAL / 2));
+  const bgBudget = bgCount ? Math.max(60 * 1024, Math.floor((TOTAL - logoReserve) / bgCount)) : 0;
+  const LOGO_BUDGET = 45 * 1024;
+  // 3) Encode each distinct image once, spending its share of the budget.
+  const imgs = new Array(order.length);
+  for (let i = 0; i < order.length; i++) {
+    const o = order[i];
+    try {
+      imgs[i] = o.kind === "logo"
+        ? await encodeForShare(o.url, 256, LOGO_BUDGET, "image/png", true)
+        : await encodeForShare(o.url, 2400, bgBudget, "image/jpeg", false);
+    } catch (e) { imgs[i] = o.url; }
+  }
+  const ref = (url) => (url && idx.has(url) ? idx.get(url) : undefined);
   // Per-kind shared logo + background (stored once, not per card).
   const shared = {};
   for (const kind of ["protocol", "compile"]) {
     const sh = deckShared[kind];
     const bg = { type: sh.bg.type, name: sh.bg.name, transform: sh.bg.transform };
-    if (sh.bg.type === "custom" && sh.bg.dataUrl) bg.img = await ref(sh.bg.dataUrl, "bg");
+    if (sh.bg.type === "custom" && sh.bg.dataUrl) bg.img = ref(sh.bg.dataUrl);
     const logo = { zoom: sh.logo.zoom || 1, offsetX: sh.logo.offsetX || 0, offsetY: sh.logo.offsetY || 0 };
-    if (sh.logo.dataUrl) logo.img = await ref(sh.logo.dataUrl, "logo");
+    if (sh.logo.dataUrl) logo.img = ref(sh.logo.dataUrl);
     shared[kind] = { bg, logo };
   }
-  // Sequential (not Promise.all) so the dedupe cache in ref() actually hits: a bg
-  // reused across cards is then stored ONCE in the pool, keeping the link small.
-  const perCard = !!deckShared.perCardBg;
   const cards = [];
   for (const c of deck) {
     const s = c.state;
     const card = { value: s.value, panelTop: s.panelTop, panelMid: s.panelMid, panelBot: s.panelBot, kind: s.kind, compile: s.compile };
     if (perCard && s.bgOwn) {
       const cb = { type: s.bgOwn.type, name: s.bgOwn.name, transform: s.bgOwn.transform };
-      if (s.bgOwn.type === "custom" && s.bgOwn.dataUrl) cb.img = await ref(s.bgOwn.dataUrl, "bg");
+      if (s.bgOwn.type === "custom" && s.bgOwn.dataUrl) cb.img = ref(s.bgOwn.dataUrl);
       card.bg = cb;
     }
     if (perCard && s.kind === "compile" && s.bgOwnBack) { // separate back-face bg
       const cbb = { type: s.bgOwnBack.type, name: s.bgOwnBack.name, transform: s.bgOwnBack.transform };
-      if (s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) cbb.img = await ref(s.bgOwnBack.dataUrl, "bg");
+      if (s.bgOwnBack.type === "custom" && s.bgOwnBack.dataUrl) cbb.img = ref(s.bgOwnBack.dataUrl);
       card.bgBack = cbb;
     }
     cards.push(card);
@@ -2440,6 +2533,24 @@ async function buildSharePayload(name) {
 }
 
 const DPASTE_API = "https://dpaste.com/api/v2/"; // CORS-enabled, returns the snippet URL in the body
+const DPASTE_BODY_CAP = 505 * 1024; // url-encoded POST body that dpaste accepts (512 KB tested OK; small margin)
+
+// Encode the form body exactly as it's POSTed, so we can size against the real limit.
+function dpasteBody(json) { return new URLSearchParams({ content: json, syntax: "text", expiry_days: "365" }); }
+
+// Build the share JSON sized so the url-encoded POST body fits dpaste, spending as
+// much of that budget as possible on image quality (only shrinks if it overflows).
+async function buildShareJson(name) {
+  let budget = 350 * 1024; // image-bytes target; base64 + url-encode overhead is ~1.42×
+  let json = "";
+  for (let i = 0; i < 4; i++) {
+    json = JSON.stringify(await buildSharePayload(name, budget));
+    const len = dpasteBody(json).toString().length;
+    if (len <= DPASTE_BODY_CAP) break;
+    budget = Math.floor(budget * (DPASTE_BODY_CAP / len) * 0.95); // proportional shrink, converges in ~1 step
+  }
+  return json;
+}
 
 el("btnExport").addEventListener("click", async () => {
   if (!deck.length) { alert("The deck is empty."); return; }
@@ -2447,11 +2558,10 @@ el("btnExport").addEventListener("click", async () => {
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
   let url, viaService = false;
   try {
-    const json = JSON.stringify(await buildSharePayload(el("inDeckName").value.trim() || "Shared deck"));
+    const json = await buildShareJson(el("inDeckName").value.trim() || "Shared deck");
     // Short link: store the deck in a free service so the URL fits anywhere.
     try {
-      const body = new URLSearchParams({ content: json, syntax: "text", expiry_days: "365" });
-      const res = await fetch(DPASTE_API, { method: "POST", body }); // form-urlencoded → no CORS preflight
+      const res = await fetch(DPASTE_API, { method: "POST", body: dpasteBody(json) }); // form-urlencoded → no CORS preflight
       if (!res.ok) throw new Error("dpaste " + res.status);
       const idd = (await res.text()).trim().split("/").filter(Boolean).pop();
       if (!idd) throw new Error("no id");
@@ -2464,11 +2574,13 @@ el("btnExport").addEventListener("click", async () => {
       url = `${location.origin}${location.pathname}#deck=${encoded}`;
     }
   } finally { btn.disabled = false; btn.textContent = orig; }
+  // Short, prominent note (accent colour) — shared images are compressed, so point
+  // users at the lossless Export/Import file when they need full quality.
+  const headsUp = '<strong style="color:var(--accent)">Heads up:</strong> shared images are compressed. For full quality (e.g. printing), use <strong>Export / Import</strong> instead.';
   const ok = await showModal({
     title: "Share deck",
-    body: viaService
-      ? "Short link ready — anyone who opens it sees the deck and can import it. (Hosted on a free service; may expire after long inactivity.)"
-      : "Couldn't reach the link service, so this is a long self-contained link — it works in a browser but may be too long for some chats. Use Export/Import (file) as a fallback.",
+    bodyHtml: viaService ? headsUp
+      : '<span style="color:var(--danger)">Link service unavailable — this is a long, self-contained link.</span><br><br>' + headsUp,
     input: true, value: url, readonly: true, confirmLabel: "Copy link", cancelLabel: "Close", danger: false,
   });
   if (ok) { try { await navigator.clipboard.writeText(url); } catch (e) {} }
@@ -2786,7 +2898,17 @@ el("btnExportPDF").addEventListener("click", async () => {
 // Export / import deck JSON
 el("btnExportDeck").addEventListener("click", () => {
   if (deck.length === 0) { alert("The deck is empty."); return; }
-  const blob = new Blob([JSON.stringify({ version: 2, cards: deck, shared: deckShared }, null, 2)], { type: "application/json" });
+  // Lossless + deduplicated: original full-res images are kept verbatim (no
+  // re-encode) but pooled once into `imgs`, so a 6-cell mosaic source isn't
+  // written 7×. This is the max-quality path for printing / moving a deck.
+  const imgs = {};
+  const payload = {
+    version: 3,
+    cards: dehydrateToDict(JSON.parse(JSON.stringify(deck)), imgs),
+    shared: dehydrateToDict(JSON.parse(JSON.stringify(deckShared)), imgs),
+    imgs,
+  };
+  const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -2826,7 +2948,14 @@ el("inImportDeck").addEventListener("change", (e) => {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const data = JSON.parse(reader.result);
+      let data = JSON.parse(reader.result);
+      // v3 export file: images are pooled in `imgs` — restore the full-res originals.
+      if (data && data.imgs && !Array.isArray(data.imgs)) {
+        data = Object.assign({}, data, {
+          cards: rehydrateFromDict(data.cards, data.imgs),
+          shared: data.shared ? rehydrateFromDict(data.shared, data.imgs) : data.shared,
+        });
+      }
       const cards = Array.isArray(data) ? data : data.cards;
       if (!Array.isArray(cards)) throw new Error("Invalid format");
       const replace = deck.length === 0 || confirm("Replace the current deck? (Cancel = append to the end)");
