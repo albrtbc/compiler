@@ -1774,13 +1774,15 @@ el("inCustomBg").addEventListener("change", () => {
   if (on) {
     const seed = (s) => {
       if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
-      // compile cards get a separate back-face bg, seeded the same so nothing changes yet
-      if (s.kind === "protocol" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
+      // the Protocol card (landscape) gets a separate back-face bg, seeded from its
+      // own shared bg so nothing changes until you edit it
+      if (s.kind === "protocol" && (!s.bgOwnBack || s.bgOwnBack.type === "none")) s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("protocol").bg));
     };
     seed(state);
     deck.forEach((c) => seed(c.state));
   } else {
     bgEditSide = "front";
+    deckShared.split = null; // turning the mode off also exits split, so it can be re-enabled as plain per-card
   }
   commitCurrentCard();   // persist the editor card under the new mode
   saveShared();
@@ -1878,7 +1880,10 @@ el("inGlitchPreset").addEventListener("change", () => {
 // Front/Back background selector — only shown for the compile (Protocol) card in
 // per-card mode, since that card has two faces that can each have their own bg.
 function refreshBgSideToggle() {
-  const show = state.kind === "protocol" && deckShared.perCardBg;
+  // Front/back can differ only in plain "different bg per card" mode — a single-image
+  // split uses the same image on both faces of the Protocol card, so no side toggle.
+  const split = !!(deckShared.split && deckShared.split.dataUrl);
+  const show = state.kind === "protocol" && deckShared.perCardBg && !split;
   el("bgSideToggle").hidden = !show;
   if (!show) bgEditSide = "front";
   el("btnBgFront").classList.toggle("active", bgEditSide === "front");
@@ -2067,11 +2072,13 @@ function applyMosaic() {
   // Save the split as a TEMPLATE (incl. the source size) instead of creating 6 cards.
   deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh, iw, ih };
   assignSplitCells(); // existing value cards take their cell; new ones take theirs as you make them
-  // non-value cards (the landscape Protocol card) keep the shared bg so per-card mode isn't blank
+  // The landscape Protocol card keeps its shared bg (it's not part of the vertical
+  // grid). In split mode both faces use the SAME image, so its back mirrors the
+  // front (no separate bgOwnBack).
   deck.forEach((c) => {
     if (!c.state || c.state.kind !== "protocol") return; const s = c.state;
-    if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor(s.kind).bg));
-    if (!s.bgOwnBack || s.bgOwnBack.type === "none") s.bgOwnBack = JSON.parse(JSON.stringify(sharedFor("compile").bg));
+    if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor("protocol").bg));
+    s.bgOwnBack = null;
   });
   if (!customBgs.includes(mosaicSrc)) { customBgs.unshift(mosaicSrc); customBgs = customBgs.slice(0, 12); saveCustomBgs(); buildBgGrid(); }
   saveShared(); saveDeck(); markDirty();
