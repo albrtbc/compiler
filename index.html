@@ -79,10 +79,9 @@
           <span class="switch-slider"></span>
           <span class="switch-text">Different background per card</span>
         </label>
-        <label class="switch" title="Apply a datamosh-style block glitch to the Protocol card's front face (its back face stays clean). Only affects the Protocol card.">
-          <input id="inFrontGlitch" type="checkbox" />
-          <span class="switch-slider"></span>
-          <span class="switch-text">Glitch effect on front</span>
+        <label class="select-row" title="Datamosh glitch on the Protocol card's front face (its back face stays clean). Only affects the Protocol card.">
+          <span class="select-row-label">Front glitch</span>
+          <select id="inGlitchPreset" class="field-select"></select>
         </label>
         <div id="bgSideToggle" class="type-toggle bg-side" hidden>
           <button id="btnBgFront" class="seg-btn active" type="button">Front bg</button>
@@ -105,6 +104,7 @@
             <button id="btnBgReset" class="btn btn-ghost btn-sm" type="button">Reset</button>
           </div>
         </div>
+        <button id="btnMosaic" class="btn btn-sm mosaic-btn" type="button" title="Lay one image across the cards (split into a grid)">Add / edit image split</button>
       </div>
 
     </section>
@@ -133,6 +133,7 @@
             <input id="inCTop" class="ovl" type="text" maxlength="60" placeholder="&gt; TOP LINE" autocomplete="off" spellcheck="false" />
             <input id="inCSub" class="ovl" type="text" maxlength="40" placeholder="SUBTITLE" autocomplete="off" spellcheck="false" />
             <input id="inCBot" class="ovl" type="text" maxlength="60" placeholder="BOTTOM LINE" autocomplete="off" spellcheck="false" />
+            <input id="inCode" class="ovl ovl-code" type="text" maxlength="10" placeholder="CUS01" title="Set code (whole deck)" autocomplete="off" spellcheck="false" />
             <button id="logoHotspot" class="ovl-logo" type="button" title="Click to upload a logo">
               <span class="ovl-logo-ico">＋</span>
               <span class="ovl-logo-txt">Logo</span>
@@ -167,7 +168,7 @@
         </div>
         <div class="deck-menu">
           <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
-          <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63×88mm, with backs)">PDF</button>
+          <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63.5×88.9mm, with backs)">PDF</button>
           <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
           <label class="btn btn-sm btn-file">
             Import
@@ -207,6 +208,32 @@
       <div class="modal-actions">
         <button id="modalCancel" class="btn btn-ghost" type="button">Cancel</button>
         <button id="modalConfirm" class="btn btn-danger" type="button">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mosaic splitter: lay one image across the 6 value cards -->
+  <div id="mosaicOverlay" class="modal-overlay" hidden>
+    <div class="mosaic-modal" role="dialog" aria-modal="true" aria-labelledby="mosaicTitle">
+      <h3 id="mosaicTitle">Split one image across the 6 cards</h3>
+      <p class="hint">Drag to move and scroll (or use the slider) to zoom. Each cell of the 3×2 grid becomes one card's background, in value order.</p>
+      <div class="mosaic-tools">
+        <label class="btn btn-sm btn-file">
+          Upload image
+          <input id="inMosaicImg" type="file" accept="image/*" hidden />
+        </label>
+        <span class="hint">Zoom</span>
+        <input id="mosaicZoom" type="range" min="10" max="400" value="100" disabled />
+        <button id="mosaicReset" class="btn btn-sm btn-ghost" type="button" disabled>Reset</button>
+      </div>
+      <div id="mosaicStage" class="mosaic-stage">
+        <img id="mosaicImg" class="mosaic-img" alt="" hidden />
+        <div id="mosaicFrame" class="mosaic-frame" hidden></div>
+        <div id="mosaicEmpty" class="mosaic-empty"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="mosaicCancel" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="mosaicAccept" class="btn btn-primary" type="button" disabled>Apply to 6 cards</button>
       </div>
     </div>
   </div>
