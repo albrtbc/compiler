@@ -852,12 +852,13 @@ const stageEl = document.querySelector(".stage");
 let previewLoadTimer = null, previewShownAt = 0, bulkLoading = false;
 // Per-render spinner: delayed-show so a fast cached render never flashes it.
 function showPreviewLoading() {
+  if (bulkLoading) return; // a deck-load already owns the overlay; don't arm a stray timer
   clearTimeout(previewLoadTimer);
   previewLoadTimer = setTimeout(() => { if (stageEl) { stageEl.classList.add("loading"); previewShownAt = performance.now(); } }, 130);
 }
 function hidePreviewLoading() {
-  if (bulkLoading) return; // a deck-load owns the overlay; it clears it itself
-  clearTimeout(previewLoadTimer);
+  clearTimeout(previewLoadTimer); // always cancel a pending delayed-show
+  if (bulkLoading) return;        // a deck-load owns the overlay class; it clears it itself
   if (stageEl) stageEl.classList.remove("loading");
 }
 // Bulk load (opening a deck, startup, import): show the overlay immediately and
