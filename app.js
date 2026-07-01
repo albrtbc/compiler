@@ -2052,13 +2052,20 @@ function mosaicEmptyState() {
 function openMosaic(opts) {
   opts = opts || {};
   el("mosaicOverlay").hidden = false;
-  if (opts.src) loadMosaicImage(opts.src);                                              // a freshly uploaded image
-  else if (deckShared.split && deckShared.split.dataUrl) loadMosaicImage(deckShared.split.dataUrl, deckShared.split); // edit the saved split
-  else if (state.bg && state.bg.type === "custom" && state.bg.dataUrl) loadMosaicImage(state.bg.dataUrl); // split the current bg
-  else if (state.bg && state.bg.type === "preset" && state.bg.name) {                   // split a selected default/preset image
+  const bg = state.bg || {};
+  const splitSrc = (deckShared.split && deckShared.split.dataUrl) || null;
+  if (opts.src) { loadMosaicImage(opts.src); return; }                                  // a freshly uploaded image
+  // A newly-selected background wins over any saved split, so you can re-split with a
+  // different image (this is why an existing deck's old split used to keep showing):
+  if (bg.type === "preset" && bg.name) {                                                // split a selected default/preset image
     mosaicEmptyState();
-    presetDataUrl(state.bg.name).then((u) => { if (u && !el("mosaicOverlay").hidden) loadMosaicImage(u); });
-  } else mosaicEmptyState(); // nothing to split yet — let them upload inside the modal
+    presetDataUrl(bg.name).then((u) => { if (u && !el("mosaicOverlay").hidden) loadMosaicImage(u); });
+    return;
+  }
+  if (bg.type === "custom" && bg.dataUrl && bg.dataUrl !== splitSrc) { loadMosaicImage(bg.dataUrl); return; } // split a different custom bg
+  if (splitSrc) { loadMosaicImage(splitSrc, deckShared.split); return; }                // else edit the saved split
+  if (bg.type === "custom" && bg.dataUrl) { loadMosaicImage(bg.dataUrl); return; }      // current bg is the split source → split it
+  mosaicEmptyState();                                                                   // nothing to split yet — upload inside the modal
 }
 function closeMosaic() { el("mosaicOverlay").hidden = true; }
 // The card-render transform that makes a 744×1039 card show image region (ix,iy,cw,ch).
