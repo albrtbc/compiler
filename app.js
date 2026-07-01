@@ -2036,16 +2036,29 @@ function loadMosaicImage(dataUrl, region) {
   };
   img.src = dataUrl;
 }
+// A preset background as a data URL, so it can be split like an uploaded image.
+async function presetDataUrl(name) {
+  try {
+    const img = await getPresetImage(name);
+    const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c.toDataURL("image/jpeg", 0.95);
+  } catch (e) { return null; }
+}
+function mosaicEmptyState() {
+  mosaicSrc = ""; el("mosaicImg").hidden = true; el("mosaicFrame").hidden = true; el("mosaicEmpty").hidden = false;
+  el("mosaicZoom").disabled = true; el("mosaicReset").disabled = true; el("mosaicAccept").disabled = true;
+}
 function openMosaic(opts) {
   opts = opts || {};
   el("mosaicOverlay").hidden = false;
   if (opts.src) loadMosaicImage(opts.src);                                              // a freshly uploaded image
   else if (deckShared.split && deckShared.split.dataUrl) loadMosaicImage(deckShared.split.dataUrl, deckShared.split); // edit the saved split
   else if (state.bg && state.bg.type === "custom" && state.bg.dataUrl) loadMosaicImage(state.bg.dataUrl); // split the current bg
-  else { // nothing to split yet — let them upload inside the modal
-    mosaicSrc = ""; el("mosaicImg").hidden = true; el("mosaicFrame").hidden = true; el("mosaicEmpty").hidden = false;
-    el("mosaicZoom").disabled = true; el("mosaicReset").disabled = true; el("mosaicAccept").disabled = true;
-  }
+  else if (state.bg && state.bg.type === "preset" && state.bg.name) {                   // split a selected default/preset image
+    mosaicEmptyState();
+    presetDataUrl(state.bg.name).then((u) => { if (u && !el("mosaicOverlay").hidden) loadMosaicImage(u); });
+  } else mosaicEmptyState(); // nothing to split yet — let them upload inside the modal
 }
 function closeMosaic() { el("mosaicOverlay").hidden = true; }
 // The card-render transform that makes a 744×1039 card show image region (ix,iy,cw,ch).
