@@ -154,7 +154,13 @@ function setState(obj) {
       return state.bgOwn;
     },
     set(v) {
-      if (!deckShared.perCardBg) { sharedFor(state.kind).bg = v; return; }
+      if (!deckShared.perCardBg) {
+        // Default mode = one deck-wide background: apply to BOTH kinds so the
+        // Protocol card (and its back) get it automatically too.
+        deckShared.protocol.bg = JSON.parse(JSON.stringify(v));
+        deckShared.compile.bg = JSON.parse(JSON.stringify(v));
+        return;
+      }
       if (state.kind === "protocol" && bgEditSide === "back") state.bgOwnBack = v;
       else state.bgOwn = v;
     },
@@ -1381,8 +1387,15 @@ function propagateShared() {
 // In per-card mode a background change touches only this card; otherwise it updates
 // the deck-wide shared bg for every card of this kind.
 function propagateBg() {
-  if (deckShared.perCardBg) onCardEdited();
-  else propagateShared();
+  if (deckShared.perCardBg) { onCardEdited(); return; }
+  // Default mode: one deck-wide background. Mirror the current bg (incl. any
+  // zoom/pan) onto both kinds so the Protocol card stays in sync, then refresh
+  // EVERY thumbnail (both kinds), not just the current one.
+  const bg = JSON.parse(JSON.stringify(sharedFor(state.kind).bg));
+  deckShared.protocol.bg = bg;
+  deckShared.compile.bg = JSON.parse(JSON.stringify(bg));
+  clearTimeout(sharedPropTimer);
+  sharedPropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(null); }, 250);
 }
 // The protocol title is deck-wide → refresh every card's thumbnail.
 let titlePropTimer = null;
@@ -2072,12 +2085,12 @@ function applyMosaic() {
   // Save the split as a TEMPLATE (incl. the source size) instead of creating 6 cards.
   deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh, iw, ih };
   assignSplitCells(); // existing value cards take their cell; new ones take theirs as you make them
-  // The landscape Protocol card keeps its shared bg (it's not part of the vertical
-  // grid). In split mode both faces use the SAME image, so its back mirrors the
-  // front (no separate bgOwnBack).
+  // The landscape Protocol card isn't part of the vertical grid, but it ALSO adopts
+  // the single image (full, cover-fit) — overriding any previous bg — and uses the
+  // SAME image on both faces (back mirrors front, no separate bgOwnBack).
   deck.forEach((c) => {
     if (!c.state || c.state.kind !== "protocol") return; const s = c.state;
-    if (!s.bgOwn || s.bgOwn.type === "none") s.bgOwn = JSON.parse(JSON.stringify(sharedFor("protocol").bg));
+    s.bgOwn = { type: "custom", name: null, dataUrl: mosaicSrc, transform: defaultTransform() };
     s.bgOwnBack = null;
   });
   if (!customBgs.includes(mosaicSrc)) { customBgs.unshift(mosaicSrc); customBgs = customBgs.slice(0, 12); saveCustomBgs(); buildBgGrid(); }
