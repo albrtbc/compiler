@@ -52,10 +52,10 @@ const defaultState = () => ({
   compile: defaultCompile(),
 });
 
-// Logo + background are shared per card kind across the whole deck: a single
-// place holds them and every card of that kind reads from it, so editing one
-// updates all of that kind. Cards keep only their own text/value.
-// title + logo are shared across the WHOLE deck (both kinds); bg is per kind (and per card in per-card mode).
+// Shared deck-wide props live here once (never copied per card); each card keeps
+// only its own text/value. Scope: title + logo IMAGE are deck-wide (both kinds);
+// background is per kind (and per card in per-card mode); the logo's zoom/offset are
+// per kind. A card reads these at render time via mergeShared().
 let deckShared = {
   title: "",
   code: "",           // deck-wide set code shown on the card edge (e.g. "HMBW", like MN01/AX01)
@@ -1903,7 +1903,7 @@ function deckBgSrc(d) {
   // Per-card / split mode: the Protocol card carries its own front bg (bgOwn), which
   // a split overrides — read it directly so the row reflects the split image.
   if (perCard) {
-    const proto = (d.cards || []).find((c) => c.state && c.state.kind === "protocol");
+    const proto = (d.cards || []).find((c) => c.state && isLandscapeKind(c.state.kind));
     const src = proto && fromBg(proto.state.bgOwn);
     if (src) return src;
   }
