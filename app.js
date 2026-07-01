@@ -55,7 +55,7 @@ const defaultState = () => ({
 // Logo + background are shared per card kind across the whole deck: a single
 // place holds them and every card of that kind reads from it, so editing one
 // updates all of that kind. Cards keep only their own text/value.
-// title is shared across the WHOLE deck (both kinds); bg + logo are shared per kind.
+// title + logo are shared across the WHOLE deck (both kinds); bg is per kind (and per card in per-card mode).
 let deckShared = {
   title: "",
   code: "",           // deck-wide set code shown on the card edge (e.g. "HMBW", like MN01/AX01)
@@ -66,6 +66,18 @@ let deckShared = {
   compile: { bg: defaultBg(), logo: defaultLogo() },
 };
 function sharedFor(kind) { return deckShared[kind === "compile" ? "compile" : "protocol"]; }
+// The logo IMAGE (dataUrl) is deck-wide — shared by BOTH kinds — but its zoom/offset
+// stay PER KIND (the landscape and vertical cards are different sizes/formats). So we
+// keep two separate logo objects (independent transforms) and only sync the image
+// across them. Canonical image = whichever slot already holds one (protocol wins).
+// Called after every deckShared (re)build, since JSON load/normalise makes fresh copies.
+function linkLogo() {
+  const p = deckShared.protocol.logo, c = deckShared.compile.logo;
+  const url = (p && p.dataUrl) || (c && c.dataUrl) || null;
+  if (p) p.dataUrl = url;
+  if (c) c.dataUrl = url;
+}
+linkLogo();
 // Card-kind semantics in ONE place: the landscape "Protocol card" is kind
 // "protocol" (two faces); a vertical value card is kind "compile" (one face).
 const isLandscapeKind = (kind) => kind === "protocol";
@@ -95,7 +107,7 @@ let revertSnapshot = null;
 // "front" → bgOwn, "back" → bgOwnBack. A compile card can have a different bg per face.
 let bgEditSide = "front";
 // The current card's title, background and logo are NOT stored on the card — they
-// live in `deckShared` (title deck-wide; bg/logo per kind) and are read/written
+// live in `deckShared` (title + logo deck-wide; bg per kind) and are read/written
 // through the explicit editTitle/editBg/editLogo accessors below. This keeps the
 // deck de-duplicated (cards carry only their own text/value) without any hidden
 // property magic on `state`.
@@ -128,8 +140,9 @@ function setEditBg(v) {
   else state.bgOwn = v;
 }
 
-function editLogo() { return sharedFor(state.kind).logo; }
-function setEditLogo(v) { sharedFor(state.kind).logo = v; }
+function editLogo() { return sharedFor(state.kind).logo; } // per-kind object: deck-wide image, per-kind zoom/offset
+// Set the deck-wide logo image on BOTH kinds, preserving each kind's own zoom/offset.
+function setLogoImage(url) { deckShared.protocol.logo.dataUrl = url; deckShared.compile.logo.dataUrl = url; }
 
 // A deck card snapshot keeps only its own content; the shared title/bg/logo come
 // from deckShared at render time (de-duplicated, never copied per card).
@@ -700,6 +713,7 @@ function saveDeck() {
 function saveShared() { idbSetPooled("deckShared", deckShared).catch((e) => console.warn("saveShared failed", e)); }
 function resetShared() {
   deckShared = { title: "", code: "", perCardBg: false, glitchPreset: 1, split: null, protocol: { bg: defaultBg(), logo: defaultLogo() }, compile: { bg: defaultBg(), logo: defaultLogo() } };
+  linkLogo();
 }
 // First non-empty title across a set of deck cards (title is deck-wide).
 function titleFromCards(cards) {
@@ -721,6 +735,7 @@ function setDeckShared(src) {
   if (src && src.split) deckShared.split = src.split;
   if (src && src.protocol) deckShared.protocol = normalizeShared(src.protocol);
   if (src && src.compile) deckShared.compile = normalizeShared(src.compile);
+  linkLogo(); // logo is deck-wide: collapse the per-kind slots onto one object
 }
 async function loadShared() {
   let sh = null;
@@ -737,6 +752,7 @@ async function loadShared() {
     const src = (card && card.state) || (cur && (cur.kind || "compile") === kind ? cur : null);
     if (src) deckShared[kind] = normalizeShared(src);
   });
+  linkLogo(); // logo is deck-wide: collapse the per-kind slots onto one object
   saveShared();
 }
 // Build shared props from a set of deck cards (first card of each kind) — used
@@ -748,6 +764,7 @@ function deriveSharedFromCards(cards) {
     const card = (cards || []).find((c) => c && c.state && c.state.kind === kind);
     if (card && card.state) deckShared[kind] = normalizeShared(card.state);
   });
+  linkLogo(); // logo is deck-wide: collapse the per-kind slots onto one object
 }
 // Re-render the cached thumbnails for the deck cards whose shared props changed
 // (kind=null → all cards, e.g. the deck-wide title) and refresh the list.
@@ -787,6 +804,12 @@ let titlePropTimer = null;
 function propagateTitle() {
   clearTimeout(titlePropTimer);
   titlePropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(null); }, 350);
+}
+// The logo image is deck-wide → adding/removing it refreshes EVERY card's thumbnail
+// (both kinds), not just the current one. (Logo zoom/offset are per-kind → propagateShared.)
+function propagateLogoImage() {
+  clearTimeout(sharedPropTimer);
+  sharedPropTimer = setTimeout(() => { saveShared(); refreshDeckThumbs(null); }, 250);
 }
 
 /* ---------------- Form ↔ state sync ---------------- */
@@ -1114,20 +1137,20 @@ el("inLogo").addEventListener("change", (e) => {
   const reader = new FileReader();
   reader.onload = async () => {
     try {
-      editLogo().dataUrl = await normalizeImage(reader.result, 320, 320, "image/png");
+      setLogoImage(await normalizeImage(reader.result, 320, 320, "image/png")); // deck-wide image
       refreshLogoUI();
       scheduleRender();
-      propagateShared();
+      propagateLogoImage(); // refresh every card's thumbnail (both kinds)
     } catch (err) { notify("Could not read that image file."); }
   };
   reader.readAsDataURL(file);
   e.target.value = "";
 });
 el("btnClearLogo").addEventListener("click", () => {
-  editLogo().dataUrl = null;
+  setLogoImage(null); // deck-wide: clear the logo on both kinds
   refreshLogoUI();
   scheduleRender();
-  propagateShared();
+  propagateLogoImage(); // refresh every card's thumbnail (both kinds)
 });
 // Click the logo hexagon on the card to upload/replace the logo.
 el("logoHotspot").addEventListener("click", () => el("inLogo").click());
