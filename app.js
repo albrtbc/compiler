@@ -1656,6 +1656,13 @@ el("btnLogoReset").addEventListener("click", () => {
 // Card type toggle (Protocol / Compile)
 function setKind(kind) {
   state.kind = kind;
+  // In split mode, switching a card TO the Protocol card must not inherit a value
+  // cell's zoomed crop — show the full image at 100% (both faces). (Switching back
+  // to a value card re-takes its cell via assignSplitCells.)
+  if (kind === "protocol" && deckShared.perCardBg && deckShared.split && deckShared.split.dataUrl) {
+    state.bgOwn = { type: "custom", name: null, dataUrl: deckShared.split.dataUrl, transform: defaultTransform() };
+    state.bgOwnBack = null;
+  }
   applyKind();
   refreshLogoUI();      // logo + background are per-kind shared, reflect the new kind
   refreshBgSelection();
