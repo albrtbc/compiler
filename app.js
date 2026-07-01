@@ -10,68 +10,29 @@
      5. White logo inside the hexagon
    ============================================================ */
 
-const CARD_W = 744;  // design space (the frame art + all zones are authored at this size)
-const CARD_H = 1039;
-// Print output: standard poker card 63.5×88.9mm (2.5×3.5") at 300dpi = 750×1050.
-// Exports render the design and resize to this; 600dpi doubles it.
-const POKER_W = 750;
-const POKER_H = 1050;
+import {
+  CARD_W, CARD_H, LAND_W, LAND_H, MOSAIC_ASPECT,
+  PANEL_FONT, LINE_FACTOR,
+  ZONES, COMPILE_FRONT, COMPILE_BACK,
+  PRESETS, GLITCH_PRESETS, STORE_DECK, STORE_CURRENT,
+} from "./src/config.js";
+import { clampScale, bgBaseScale, cellTransform } from "./src/core/geometry.js";
+import { bytesToB64url, b64urlToBytes } from "./src/core/base64.js";
+import { imgKey } from "./src/core/imageKey.js";
+import { defaultTransform, defaultBg, defaultLogo, migrateBg, sameBg, hydrateBg, hydrateLogo } from "./src/model/bg.js";
+import { compareCardStates, compareDeckEntries } from "./src/model/order.js";
+import {
+  loadImage, normalizeImage, encodeForShare,
+  getImageFromDataUrl, getPresetImage, getValueOverlay, rotate90ccw,
+} from "./src/core/images.js";
+import {
+  fitSingleLine, drawLine, drawPanelText, panelFitSize, markersToHtml, htmlToMarkers,
+} from "./src/render/text.js";
+import { glitchSeed, applyFrontGlitch } from "./src/render/glitch.js";
+import { drawLogoHex, drawBackground, drawSideCode, toPoker } from "./src/render/draw.js";
+import { idbGet, idbSet } from "./src/storage/idb.js";
+
 let exportScale = 1; // 1 = 300dpi, 2 = 600dpi (set by the export-resolution toggle)
-
-// Zone coordinates measured against the 744×1039 frame.
-const ZONES = {
-  title: { x: 39, y: 31, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18 },
-  value: { x: 292, y: 40, w: 159, h: 175, font: "HackedKerX", max: 161, min: 28, dy: 10, dx: 0 },
-  hex:   { x: 583, y: 36, w: 124, h: 135, pointy: "v", flatA: 0.26, flatB: 0.85 }, // covers the frame hexagon
-  panels: {
-    top: { x: 80, y: 258, w: 580, h: 190 },
-    mid: { x: 78, y: 508, w: 570, h: 210 },
-    bot: { x: 78, y: 766, w: 585, h: 214 },
-  },
-};
-const PANEL_FONT = "SupermolotR";
-const PANEL_MAX = 38;
-const PANEL_MIN = 13;
-const LINE_FACTOR = 1.18;
-
-// Compile card: designed/viewed in LANDSCAPE (the vertical frame rotated +90° CCW).
-const LAND_W = 1039, LAND_H = 744;
-const TEXT_SHADOW = { color: "rgba(0,0,0,0.7)", blur: 17, dx: 0, dy: 8 };
-const COMPILE_FRONT = {
-  topBar:   { x: 72, y: 40, w: 700, h: 80, font: "SupermolotR", max: 36, min: 14, align: "left", padX: 26 },
-  name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW },   // center ≈356
-  subtitle: { x: 60, y: 418, w: 930, h: 90, font: "MotionControl", max: 62, min: 16, shadow: TEXT_SHADOW },  // center ≈463
-  bottomBar:{ x: 60, y: 620, w: 930, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 }, // centred on the card like name/subtitle
-  hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
-};
-const COMPILE_BACK = {
-  // name sits in the thick (left) part of the bottom bar, left-aligned at the same height as the back line
-  name:     { x: 78, y: 592, w: 510, h: 128, font: "HackedKerX", max: 104, min: 24, align: "left", padX: 30 }, // center ≈656
-  backLine: { x: 652, y: 626, w: 356, h: 84, font: "SupermolotR", max: 40, min: 14, align: "center", padX: 16 }, // center ≈668
-  hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
-};
-
-const PRESETS = [
-  "Water", "Love", "Apathy", "Spirit", "Fire", "Gravity", "Light", "Metal",
-  "Death", "Hate", "Darkness", "Plague", "Psychic", "Speed", "Life",
-];
-
-// Old Spanish preset names → current English file names (cards saved before the rename).
-const PRESET_MIGRATION = {
-  Agua: "Water", Amor: "Love", Apatia: "Apathy", Espiritu: "Spirit", Fuego: "Fire",
-  Gravedad: "Gravity", Luz: "Light", Muerte: "Death", Odio: "Hate", Oscuridad: "Darkness",
-  Plaga: "Plague", Psiquico: "Psychic", Velocidad: "Speed", Vida: "Life",
-};
-function migrateBg(bg) {
-  if (bg && bg.type === "preset" && bg.name && PRESET_MIGRATION[bg.name]) {
-    bg.name = PRESET_MIGRATION[bg.name];
-    return true;
-  }
-  return false;
-}
-
-const STORE_DECK = "deckbuilder.deck.v1";
-const STORE_CURRENT = "deckbuilder.current.v1";
 
 /* ---------------- State ---------------- */
 const defaultCompile = () => ({ top: "", subtitle: "LOADING...", bottom: "", back: "COMPILED" });
@@ -91,16 +52,9 @@ const defaultState = () => ({
   compile: defaultCompile(),
 });
 
-const defaultTransform = () => ({ scale: 1, offsetX: 0, offsetY: 0 });
-const SCALE_MIN = 0.25;
-const SCALE_MAX = 16; // headroom for the mosaic splitter (each cell is a cropped-in region)
-const clampScale = (s) => Math.min(SCALE_MAX, Math.max(SCALE_MIN, s || 1));
-
 // Logo + background are shared per card kind across the whole deck: a single
 // place holds them and every card of that kind reads from it, so editing one
 // updates all of that kind. Cards keep only their own text/value.
-const defaultBg = () => ({ type: "none", name: null, dataUrl: null, transform: defaultTransform() });
-const defaultLogo = () => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
 // title is shared across the WHOLE deck (both kinds); bg + logo are shared per kind.
 let deckShared = {
   title: "",
@@ -112,6 +66,9 @@ let deckShared = {
   compile: { bg: defaultBg(), logo: defaultLogo() },
 };
 function sharedFor(kind) { return deckShared[kind === "compile" ? "compile" : "protocol"]; }
+// Card-kind semantics in ONE place: the landscape "Protocol card" is kind
+// "protocol" (two faces); a vertical value card is kind "compile" (one face).
+const isLandscapeKind = (kind) => kind === "protocol";
 // A render-ready copy of a card with the shared title + per-kind bg/logo merged
 // in. `st._shared` (={title,bg,logo}) overrides the global deck props — used to
 // render a foreign deck in the share gallery without touching the viewer's deck.
@@ -137,42 +94,42 @@ let revertSnapshot = null;
 // Which face of a compile card the background controls edit (per-card mode only):
 // "front" → bgOwn, "back" → bgOwnBack. A compile card can have a different bg per face.
 let bgEditSide = "front";
-// state.title / state.bg / state.logo are live views of the shared props, so the
-// existing controls edit the deck-wide title and per-kind bg/logo directly.
+// The current card's title, background and logo are NOT stored on the card — they
+// live in `deckShared` (title deck-wide; bg/logo per kind) and are read/written
+// through the explicit editTitle/editBg/editLogo accessors below. This keeps the
+// deck de-duplicated (cards carry only their own text/value) without any hidden
+// property magic on `state`.
 function setState(obj) {
   state = obj;
-  Object.defineProperty(state, "title", {
-    enumerable: true, configurable: true,
-    get() { return deckShared.title; },
-    set(v) { deckShared.title = v; },
-  });
-  Object.defineProperty(state, "bg", {
-    enumerable: true, configurable: true,
-    get() {
-      if (!deckShared.perCardBg) return sharedFor(state.kind).bg;
-      if (state.kind === "protocol" && bgEditSide === "back") return state.bgOwnBack || state.bgOwn;
-      return state.bgOwn;
-    },
-    set(v) {
-      if (!deckShared.perCardBg) {
-        // Default mode = one deck-wide background: apply to BOTH kinds so the
-        // Protocol card (and its back) get it automatically too.
-        deckShared.protocol.bg = JSON.parse(JSON.stringify(v));
-        deckShared.compile.bg = JSON.parse(JSON.stringify(v));
-        return;
-      }
-      if (state.kind === "protocol" && bgEditSide === "back") state.bgOwnBack = v;
-      else state.bgOwn = v;
-    },
-  });
-  Object.defineProperty(state, "logo", {
-    enumerable: true, configurable: true,
-    get() { return sharedFor(state.kind).logo; },
-    set(v) { sharedFor(state.kind).logo = v; },
-  });
   return state;
 }
 setState(defaultState());
+
+/* ---- Editor accessors: the working card's title/bg/logo, routed to deckShared ----
+   Reads return the shared object by reference, so mutating a returned bg/logo edits
+   the shared copy in place; the setters route a whole new value to the right slot. */
+function editTitle() { return deckShared.title; }
+function setEditTitle(v) { deckShared.title = v; }
+
+function editBg() {
+  if (!deckShared.perCardBg) return sharedFor(state.kind).bg;
+  if (state.kind === "protocol" && bgEditSide === "back") return state.bgOwnBack || state.bgOwn;
+  return state.bgOwn;
+}
+function setEditBg(v) {
+  if (!deckShared.perCardBg) {
+    // Default mode = one deck-wide background: apply to BOTH kinds so the
+    // Protocol card (and its back) get it automatically too.
+    deckShared.protocol.bg = JSON.parse(JSON.stringify(v));
+    deckShared.compile.bg = JSON.parse(JSON.stringify(v));
+    return;
+  }
+  if (state.kind === "protocol" && bgEditSide === "back") state.bgOwnBack = v;
+  else state.bgOwn = v;
+}
+
+function editLogo() { return sharedFor(state.kind).logo; }
+function setEditLogo(v) { sharedFor(state.kind).logo = v; }
 
 // A deck card snapshot keeps only its own content; the shared title/bg/logo come
 // from deckShared at render time (de-duplicated, never copied per card).
@@ -184,114 +141,7 @@ function cardSnapshot(st) {
 }
 
 /* ---------------- Asset loading ---------------- */
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not load: " + src));
-    img.src = src;
-  });
-}
-
 const assets = { frame: null, panels: {}, compileFrontLand: null, compileBackLand: null };
-const presetCache = new Map(); // name -> Image (full-res)
-const dataUrlCache = new Map(); // dataUrl -> Image
-
-// Downscale + recompress an uploaded image so it fits comfortably in
-// localStorage (a full-res photo as base64 easily blows the ~5MB quota).
-// The card only renders ~744px wide, so we never need more than that.
-function normalizeImage(dataUrl, maxW, maxH, mime, quality) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxW / img.width, maxH / img.height);
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
-      const c = document.createElement("canvas");
-      c.width = w;
-      c.height = h;
-      const cx = c.getContext("2d");
-      cx.imageSmoothingQuality = "high";
-      cx.drawImage(img, 0, 0, w, h);
-      resolve(c.toDataURL(mime, quality));
-    };
-    img.onerror = () => reject(new Error("decode failed"));
-    img.src = dataUrl;
-  });
-}
-
-// Bytes carried by a dataURL's base64 body (≈ what it costs in the share link).
-function dataUrlBytes(u) { const i = u.indexOf(","); return Math.ceil((u.length - i - 1) * 0.75); }
-
-// Encode an image for the share link: stepped high-quality downscale, then JPEG
-// (or PNG for logos) with quality/size lowered only as needed to fit `budgetBytes`.
-// The share transport (dpaste) caps the whole payload at <1 MB, so we spend that
-// budget on the FEW pooled images instead of crushing everything to 720px.
-function encodeForShare(dataUrl, maxDim, budgetBytes, mime, isLogo) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const longSide = Math.max(img.width, img.height);
-      const encode = (targetLong, q) => {
-        const scale = Math.min(1, targetLong / longSide);
-        const tw = Math.max(1, Math.round(img.width * scale));
-        const th = Math.max(1, Math.round(img.height * scale));
-        const src = hqDownscaled(img, tw); // pre-stepped so the final draw is ~1:1 → crisp
-        const c = document.createElement("canvas"); c.width = tw; c.height = th;
-        const cx = c.getContext("2d"); cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = "high";
-        cx.drawImage(src, 0, 0, tw, th);
-        return c.toDataURL(mime, q);
-      };
-      let dim = Math.min(maxDim, longSide);
-      if (isLogo) { resolve(encode(dim, 1)); return; } // small PNG, no need to tune
-      // Spend the budget on the LARGEST size that still fits at decent quality:
-      // at each size try quality high→low and take the first that fits; only shrink
-      // the image if even q=0.6 won't fit. Keeps resolution and avoids muddy q=0.5.
-      let best = null;
-      for (let i = 0; i < 8 && dim >= 600; i++) {
-        for (const q of [0.9, 0.84, 0.78, 0.72, 0.66, 0.6]) {
-          const out = encode(dim, q);
-          if (dataUrlBytes(out) <= budgetBytes) { best = out; break; }
-        }
-        if (best) break;
-        dim = Math.round(dim * 0.85);
-      }
-      resolve(best || encode(Math.max(600, dim), 0.5));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
-async function getImageFromDataUrl(dataUrl) {
-  if (!dataUrl) return null;
-  if (dataUrlCache.has(dataUrl)) return dataUrlCache.get(dataUrl);
-  const img = await loadImage(dataUrl);
-  dataUrlCache.set(dataUrl, img);
-  return img;
-}
-
-async function getPresetImage(name) {
-  if (presetCache.has(name)) return presetCache.get(name);
-  const img = await loadImage(`card-backgrounds/${name}.jpg`);
-  presetCache.set(name, img);
-  return img;
-}
-
-// Per-value art (card-frame/value_<n>.png) drawn behind the frame on normal
-// cards. Only numeric values map to a file; anything without a matching file
-// resolves to null (cached) so the card just renders without it — no error.
-const valueOverlayCache = new Map(); // value token -> Image | null
-async function getValueOverlay(value) {
-  const v = String(value == null ? "" : value).trim();
-  if (!/^[0-9]+$/.test(v)) return null;
-  if (valueOverlayCache.has(v)) return valueOverlayCache.get(v);
-  let img = null;
-  try { img = await loadImage(`card-frame/value_${v}.png`); } catch (e) { img = null; }
-  valueOverlayCache.set(v, img);
-  return img;
-}
 
 async function loadFonts() {
   const defs = [
@@ -308,368 +158,10 @@ async function loadFonts() {
   );
 }
 
-/* ---------------- Text helpers ---------------- */
-function fitSingleLine(ctx, text, fontFam, maxW, maxH, maxSize, minSize) {
-  let size = maxSize;
-  for (; size >= minSize; size--) {
-    ctx.font = `${size}px ${fontFam}`;
-    const m = ctx.measureText(text);
-    const h = (m.actualBoundingBoxAscent || size * 0.8) + (m.actualBoundingBoxDescent || size * 0.2);
-    if (m.width <= maxW && h <= maxH) break;
-  }
-  return Math.max(size, minSize);
-}
-
-function wrapLines(ctx, text, fontFam, size, maxW) {
-  ctx.font = `${size}px ${fontFam}`;
-  const lines = [];
-  // honour explicit line breaks
-  for (const para of text.split("\n")) {
-    if (para.trim() === "") { lines.push(""); continue; }
-    let cur = "";
-    for (const word of para.split(/\s+/)) {
-      const test = cur ? cur + " " + word : word;
-      if (ctx.measureText(test).width <= maxW || !cur) {
-        cur = test;
-      } else {
-        lines.push(cur);
-        cur = word;
-      }
-    }
-    if (cur) lines.push(cur);
-  }
-  return lines;
-}
-
-function drawLine(ctx, text, zone, color) {
-  if (!text) return;
-  const padX = zone.padX || 0;
-  const availW = zone.w - padX * 2;
-  const size = fitSingleLine(ctx, text, zone.font, availW, zone.h, zone.max, zone.min);
-  ctx.font = `${size}px ${zone.font}`;
-  ctx.fillStyle = color;
-  ctx.textBaseline = "middle";
-  if (zone.shadow) {
-    ctx.shadowColor = zone.shadow.color || "rgba(0,0,0,0.5)";
-    ctx.shadowBlur = zone.shadow.blur || 0;
-    ctx.shadowOffsetX = zone.shadow.dx || 0;
-    ctx.shadowOffsetY = zone.shadow.dy || 0;
-  }
-  const cy = zone.y + zone.h / 2 + (zone.dy || 0);
-  if (zone.align === "left") {
-    ctx.textAlign = "left";
-    ctx.fillText(text, zone.x + padX, cy, availW);
-  } else {
-    ctx.textAlign = "center";
-    ctx.fillText(text, zone.x + zone.w / 2 + (zone.dx || 0), cy, availW);
-  }
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
-}
-
-/* ---- Rich panel text: **bold** and __underline__ ---- */
-// Parse one paragraph into styled runs. ** toggles bold, __ toggles underline.
-function parseRich(text) {
-  const runs = [];
-  let bold = false, underline = false, buf = "";
-  const flush = () => { if (buf) { runs.push({ text: buf, bold, underline }); buf = ""; } };
-  for (let i = 0; i < text.length; i++) {
-    const two = text.substr(i, 2);
-    if (two === "**") { flush(); bold = !bold; i++; continue; }
-    if (two === "__") { flush(); underline = !underline; i++; continue; }
-    buf += text[i];
-  }
-  flush();
-  return runs;
-}
-// Split text into paragraphs → words, each word a list of styled pieces.
-function richParagraphs(text) {
-  return text.split("\n").map((para) => {
-    const words = [];
-    let cur = null;
-    for (const run of parseRich(para)) {
-      for (const part of run.text.split(/(\s+)/)) {
-        if (part === "") continue;
-        if (/^\s+$/.test(part)) { if (cur) { words.push(cur); cur = null; } }
-        else { if (!cur) cur = []; cur.push({ text: part, bold: run.bold, underline: run.underline }); }
-      }
-    }
-    if (cur) words.push(cur);
-    return words;
-  });
-}
-function pieceFont(p, size) { return `${size}px ${p.bold ? "SupermolotB" : PANEL_FONT}`; }
-function wordWidth(ctx, word, size) {
-  let w = 0;
-  for (const p of word) { ctx.font = pieceFont(p, size); w += ctx.measureText(p.text).width; }
-  return w;
-}
-function wrapRich(ctx, paragraphs, size, maxW) {
-  ctx.font = `${size}px ${PANEL_FONT}`;
-  const spaceW = ctx.measureText(" ").width;
-  const lines = [];
-  for (const words of paragraphs) {
-    let line = [], lineW = 0;
-    for (const word of words) {
-      const ww = wordWidth(ctx, word, size);
-      const add = line.length ? spaceW + ww : ww;
-      if (line.length && lineW + add > maxW) { lines.push(line); line = [word]; lineW = ww; }
-      else { line.push(word); lineW += add; }
-    }
-    lines.push(line);
-  }
-  return { lines, spaceW };
-}
-
-function drawPanelText(ctx, text, zone, color) {
-  const t = text.replace(/\s+$/g, "");
-  if (!t.trim()) return;
-  const paragraphs = richParagraphs(t);
-  let size = PANEL_MAX, wrapped = null;
-  for (; size >= PANEL_MIN; size--) {
-    wrapped = wrapRich(ctx, paragraphs, size, zone.w);
-    if (wrapped.lines.length * size * LINE_FACTOR <= zone.h) break;
-  }
-  ctx.fillStyle = color;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  const lh = size * LINE_FACTOR;
-  const ulThick = Math.max(1, size * 0.06);
-  const spaceW = wrapped.spaceW;
-  let y = zone.y + Math.max(0, (zone.h - wrapped.lines.length * lh) / 2); // vertically centred
-  for (const line of wrapped.lines) {
-    let x = zone.x;
-    const ulY = y + size * 0.92;
-    let prevUnderline = false; // underline state at the end of the previous word
-    for (let wi = 0; wi < line.length; wi++) {
-      const word = line[wi];
-      if (wi > 0) {
-        // underline the space too when it sits between two underlined runs
-        if (prevUnderline && word.length && word[0].underline) ctx.fillRect(x, ulY, spaceW, ulThick);
-        x += spaceW;
-      }
-      for (const p of word) {
-        ctx.font = pieceFont(p, size);
-        ctx.fillText(p.text, x, y);
-        const pw = ctx.measureText(p.text).width;
-        if (p.underline) ctx.fillRect(x, ulY, pw, ulThick);
-        x += pw;
-        prevUnderline = p.underline;
-      }
-    }
-    y += lh;
-  }
-}
-
-/* ---------------- Logo (white, hexagon-clipped, zoomable) ---------------- */
-// Hexagon outline matching the frame: "v" = points top/bottom (vertical card),
-// "h" = points left/right (rotated/landscape card). Flat sides over the middle 50%.
-function hexPath(ctx, box, pointy) {
-  const { x, y, w, h } = box, cx = x + w / 2, cy = y + h / 2;
-  const a = box.flatA != null ? box.flatA : 0.25; // where the flat edge starts
-  const b = box.flatB != null ? box.flatB : 0.75; // where the flat edge ends
-  ctx.beginPath();
-  if (pointy === "h") { // points left/right, flat top & bottom edges
-    ctx.moveTo(x, cy);
-    ctx.lineTo(x + w * a, y);
-    ctx.lineTo(x + w * b, y);
-    ctx.lineTo(x + w, cy);
-    ctx.lineTo(x + w * b, y + h);
-    ctx.lineTo(x + w * a, y + h);
-  } else { // points top/bottom, flat left & right edges
-    ctx.moveTo(cx, y);
-    ctx.lineTo(x + w, y + h * a);
-    ctx.lineTo(x + w, y + h * b);
-    ctx.lineTo(cx, y + h);
-    ctx.lineTo(x, y + h * b);
-    ctx.lineTo(x, y + h * a);
-  }
-  ctx.closePath();
-}
-
-// Draw the logo white-tinted, cover-filling the hexagon (so it hides the frame's
-// hexagon) and clipped to the hexagon shape. `zoom` scales beyond the cover fit.
-function drawLogoHex(ctx, img, box, pointy, logo) {
-  const lg = logo || {};
-  const z = Math.max(0.3, Math.min(4, lg.zoom || 1));
-  const ox = lg.offsetX || 0, oy = lg.offsetY || 0;
-  const s = Math.max(box.w / img.width, box.h / img.height) * z;
-  const w = img.width * s, h = img.height * s;
-  const off = document.createElement("canvas");
-  off.width = Math.max(1, Math.round(w));
-  off.height = Math.max(1, Math.round(h));
-  const oc = off.getContext("2d");
-  oc.drawImage(img, 0, 0, off.width, off.height);
-  oc.globalCompositeOperation = "source-in";
-  oc.fillStyle = "#ffffff";
-  oc.fillRect(0, 0, off.width, off.height);
-  ctx.save();
-  hexPath(ctx, box, pointy);
-  ctx.clip();
-  ctx.drawImage(off, box.x + (box.w - w) / 2 + ox, box.y + (box.h - h) / 2 + oy, w, h);
-  ctx.restore();
-}
-
-// Rotate an image 90° counter-clockwise into a new canvas (vertical frame → landscape).
-function rotate90ccw(img) {
-  const c = document.createElement("canvas");
-  c.width = img.height; c.height = img.width;
-  const x = c.getContext("2d");
-  x.translate(0, c.height);
-  x.rotate(-Math.PI / 2);
-  x.drawImage(img, 0, 0);
-  return c;
-}
-
-/* ---------------- Background draw (cover + pan/zoom) ---------------- */
-// base "cover" scale so scale=1 exactly fills the card; the user transform
-// multiplies that scale and offsets from the centred position (card pixels).
-function bgBaseScale(img, dw = CARD_W, dh = CARD_H) {
-  return Math.max(dw / img.width, dh / img.height);
-}
-// High-quality downscale by repeated halving: a single big drawImage step (e.g.
-// 8000→744) is soft/aliased, so we step the image down to ~the displayed width
-// first. Cached per image so exports of several cards reuse the work.
-const hqCache = new WeakMap(); // img -> Map(targetWidth -> canvas)
-function hqDownscaled(img, targetW) {
-  const tw = Math.max(1, Math.round(targetW));
-  if (!img.width || img.width <= tw * 1.5) return img; // upscaling / minor → no benefit
-  let m = hqCache.get(img); if (!m) { m = new Map(); hqCache.set(img, m); }
-  if (m.has(tw)) return m.get(tw);
-  let cur = img, cw = img.width, ch = img.height;
-  while (cw > tw * 2) {
-    const nw = Math.max(tw, Math.round(cw / 2)), nh = Math.max(1, Math.round(ch * nw / cw));
-    const c = document.createElement("canvas"); c.width = nw; c.height = nh;
-    const cx = c.getContext("2d"); cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = "high";
-    cx.drawImage(cur, 0, 0, nw, nh); cur = c; cw = nw; ch = nh;
-  }
-  const fh = Math.max(1, Math.round(ch * tw / cw));
-  const fc = document.createElement("canvas"); fc.width = tw; fc.height = fh;
-  const fcx = fc.getContext("2d"); fcx.imageSmoothingEnabled = true; fcx.imageSmoothingQuality = "high";
-  fcx.drawImage(cur, 0, 0, tw, fh);
-  if (m.size > 8) m.clear();
-  m.set(tw, fc);
-  return fc;
-}
-function drawBackground(ctx, img, t, dw = CARD_W, dh = CARD_H, hq = false) {
-  const s = bgBaseScale(img, dw, dh) * clampScale(t ? t.scale : 1);
-  const w = img.width * s;
-  const h = img.height * s;
-  const x = (dw - w) / 2 + (t ? t.offsetX : 0);
-  const y = (dh - h) / 2 + (t ? t.offsetY : 0);
-  const physScale = (ctx.getTransform && ctx.getTransform().a) || 1; // device px per logical unit (hi-res export)
-  ctx.drawImage(hq ? hqDownscaled(img, w * physScale) : img, x, y, w, h);
-}
-
-/* ---------------- Front "glitch" effect ---------------- */
-// Small deterministic PRNG so each card's glitch is stable across re-renders.
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function hashStr(s) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-// A seed that's stable per card but varies between cards.
-function glitchSeed(st) { return (st.value || "") + "|" + st.kind + "|" + (st.title || ""); }
-// 10 glitch presets (index 1..10; dropdown value 0 = no glitch). #1 is the default.
-const GLITCH_PRESETS = [
-  { name: "Classic",     rowH: [.025, .085], colW: [.05, .20], shardChance: .55, shardDX: .13, dupes: 22, dupSize: [.05, .13], dupCopies: 3, chroma: 12, chromaA: .40, chromaDX: .06 },
-  { name: "Heavy shift", rowH: [.020, .060], colW: [.06, .16], shardChance: .70, shardDX: .28, dupes: 14, dupSize: [.06, .14], dupCopies: 2, chroma: 10, chromaA: .45, chromaDX: .12 },
-  { name: "Fine blocks", rowH: [.012, .040], colW: [.02, .08], shardChance: .60, shardDX: .08, dupes: 40, dupSize: [.02, .06], dupCopies: 2, chroma: 16, chromaA: .35, chromaDX: .04 },
-  { name: "Big blocks",  rowH: [.060, .180], colW: [.12, .30], shardChance: .50, shardDX: .16, dupes: 10, dupSize: [.12, .26], dupCopies: 2, chroma: 6,  chromaA: .40, chromaDX: .07 },
-  { name: "Scanlines",   rowH: [.010, .030], colW: [.90, 1.0], shardChance: .50, shardDX: .22, dupes: 4,  dupSize: [.10, .20], dupCopies: 1, chroma: 22, chromaA: .50, chromaDX: .10 },
-  { name: "Heavy clone", rowH: [.030, .090], colW: [.05, .16], shardChance: .40, shardDX: .10, dupes: 48, dupSize: [.05, .16], dupCopies: 4, chroma: 8,  chromaA: .35, chromaDX: .05 },
-  { name: "Subtle",      rowH: [.020, .060], colW: [.05, .16], shardChance: .30, shardDX: .06, dupes: 8,  dupSize: [.04, .10], dupCopies: 1, chroma: 6,  chromaA: .25, chromaDX: .03 },
-  { name: "Chroma",      rowH: [.030, .080], colW: [.06, .18], shardChance: .45, shardDX: .10, dupes: 14, dupSize: [.05, .12], dupCopies: 2, chroma: 30, chromaA: .55, chromaDX: .14 },
-  { name: "Tall shards", rowH: [.080, .220], colW: [.03, .10], shardChance: .60, shardDX: .10, dupes: 16, dupSize: [.04, .10], dupCopies: 2, chroma: 10, chromaA: .40, chromaDX: .06 },
-  { name: "Chaos",       rowH: [.020, .100], colW: [.04, .24], shardChance: .75, shardDX: .30, dupes: 60, dupSize: [.04, .18], dupCopies: 4, chroma: 24, chromaA: .50, chromaDX: .16 },
-];
-// Datamosh-style block glitch driven by a preset config. Run AFTER the background
-// and BEFORE the frame/panels/text so only the bg is glitched.
-function applyFrontGlitch(ctx, w, h, seedStr, cfg) {
-  cfg = cfg || GLITCH_PRESETS[0];
-  const rnd = mulberry32(hashStr(seedStr || "glitch"));
-  const sc = (ctx.getTransform && ctx.getTransform().a) || 1; // physical px per logical unit (hi-res export)
-  const off = document.createElement("canvas");
-  off.width = ctx.canvas.width; off.height = ctx.canvas.height; // physical snapshot
-  off.getContext("2d").drawImage(ctx.canvas, 0, 0);
-  const lerp = (r) => r[0] + rnd() * (r[1] - r[0]);
-
-  // 1) Displaced shards. Source coords physical (×sc), dest coords logical.
-  let y = 0;
-  while (y < h) {
-    const rh = h * lerp(cfg.rowH);
-    let x = 0;
-    while (x < w) {
-      const rw = w * lerp(cfg.colW);
-      const cw = Math.min(rw, w - x), ch = Math.min(rh, h - y);
-      if (rnd() < cfg.shardChance) {
-        const dx = (rnd() - 0.5) * w * cfg.shardDX;
-        ctx.drawImage(off, x * sc, y * sc, cw * sc, ch * sc, x + dx, y, cw, ch);
-      }
-      x += rw;
-    }
-    y += rh;
-  }
-
-  // 2) Duplicated squares: copy chunks and stamp them elsewhere (cloned-block look).
-  for (let i = 0; i < cfg.dupes; i++) {
-    const sz = w * lerp(cfg.dupSize);
-    const sw = Math.min(sz, w), sh = Math.min(sz, h);
-    const sx = rnd() * (w - sw), sy = rnd() * (h - sh);
-    const copies = 1 + Math.floor(rnd() * cfg.dupCopies);
-    for (let k = 0; k < copies; k++) {
-      const dx = rnd() * (w - sw);
-      const dy = (rnd() < 0.6) ? sy + (rnd() - 0.5) * h * 0.06 : rnd() * (h - sh);
-      ctx.drawImage(off, sx * sc, sy * sc, sw * sc, sh * sc, dx, Math.max(0, Math.min(h - sh, dy)), sw, sh);
-    }
-  }
-
-  // 3) Bright chromatic slices for a fringe.
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  ctx.globalAlpha = cfg.chromaA;
-  for (let i = 0; i < cfg.chroma; i++) {
-    const sy = rnd() * h, sh = h * (0.004 + rnd() * 0.02), dx = (rnd() - 0.5) * w * cfg.chromaDX;
-    ctx.drawImage(off, 0, sy * sc, off.width, sh * sc, dx, sy, w, sh);
-  }
-  ctx.restore();
-}
+/* ---------------- Deck-wide glitch + code selectors ---------------- */
 // Selected glitch preset index for a card (0 = none).
 function glitchPresetOf(st) { return st._shared ? (st._shared.glitchPreset || 0) : deckShared.glitchPreset; }
 function deckCode(st) { return st._shared ? st._shared.code : deckShared.code; }
-
-// Small deck-wide "set code" (e.g. HMBW / MN01) drawn on the card edge, like the
-// official cards. `vertical` draws it rotated, reading bottom-to-top.
-function drawSideCode(ctx, text, opts) {
-  const t = (text || "").trim().toUpperCase();
-  if (!t) return;
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.shadowColor = "rgba(0,0,0,0.6)";
-  ctx.shadowBlur = 4;
-  ctx.font = (opts.size || 20) + "px " + (opts.font || "SupermolotR");
-  ctx.textBaseline = "middle";
-  if (opts.letterSpacing != null) { try { ctx.letterSpacing = opts.letterSpacing + "px"; } catch (e) {} }
-  if (opts.vertical) {
-    ctx.translate(opts.x, opts.y);
-    ctx.rotate(-Math.PI / 2); // text reads bottom-to-top
-    if (opts.condense) ctx.scale(opts.condense, 1); // squish along the run → flatter (achatada)
-    ctx.textAlign = opts.topAnchor ? "right" : "center"; // topAnchor → run grows down from anchor y
-    ctx.fillText(t, 0, 0);
-  } else {
-    ctx.textAlign = opts.align || "right";
-    ctx.fillText(t, opts.x, opts.y);
-  }
-  ctx.restore();
-}
 
 /* ---------------- Core render ---------------- */
 let lastBgImg = null; // background image currently shown in the main preview (for cursor-anchored zoom)
@@ -804,17 +296,13 @@ async function renderCompileVertical(st, side, cnv, hq = false, scale = 1) {
   x.drawImage(land, 0, 0);
 }
 
-// Resize a freshly-rendered card to the exact print size (poker 63.5×88.9mm),
-// keeping orientation. `scale` is the dpi factor (1 = 300dpi, 2 = 600dpi).
-function toPoker(master, scale) {
-  const landscape = master.width > master.height;
-  const w = Math.round((landscape ? POKER_H : POKER_W) * scale);
-  const h = Math.round((landscape ? POKER_W : POKER_H) * scale);
-  if (master.width === w && master.height === h) return master;
-  const out = document.createElement("canvas"); out.width = w; out.height = h;
-  const cx = out.getContext("2d"); cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = "high";
-  cx.drawImage(master, 0, 0, w, h);
-  return out;
+// Render one face of a card into a canvas, dispatching on kind — the single place
+// that knows "protocol" → landscape renderer (+ face) and "compile" → the vertical
+// value-card renderer. Callers (thumbnails, single/all PNG export, share gallery)
+// go through this instead of branching on kind themselves.
+async function renderKind(st, cnv, { side = "front", hq = false, scale = 1 } = {}) {
+  if (isLandscapeKind(st.kind)) return renderCompileLandscape(st, side, cnv, hq, scale);
+  return renderCard(st, cnv, hq, scale);
 }
 
 /* ---------------- Main preview ---------------- */
@@ -838,7 +326,7 @@ async function scheduleRender(save = true) {
   if (rendering) { renderQueued = true; renderQueuedSave = renderQueuedSave || save; return; }
   rendering = true;
   try {
-    if (state.kind === "protocol") {
+    if (isLandscapeKind(state.kind)) {
       await renderCompileLandscape(state, "front", canvas);
       await renderCompileLandscape(state, "back", canvasBack);
     } else {
@@ -847,7 +335,7 @@ async function scheduleRender(save = true) {
   } catch (e) {
     console.error(e);
   }
-  if (backHolder) backHolder.hidden = state.kind !== "protocol";
+  if (backHolder) backHolder.hidden = !isLandscapeKind(state.kind);
   rendering = false;
   layoutOverlay();
   if (save) debouncedSave();
@@ -954,67 +442,11 @@ function hexFor(mode) {
   return mode === "back" ? COMPILE_BACK.hex : mode === "front" ? COMPILE_FRONT.hex : ZONES.hex;
 }
 
-// Font size + line count the canvas uses for a wrapped panel (mirrors drawPanelText).
-function panelFitSize(text, zone) {
-  const t = (text || "").replace(/\s+$/g, "");
-  if (!t.trim()) return { size: PANEL_MAX, lines: 1 };
-  const paras = richParagraphs(t);
-  let size = PANEL_MAX, wrapped = null;
-  for (; size >= PANEL_MIN; size--) {
-    wrapped = wrapRich(measureCtx, paras, size, zone.w);
-    if (wrapped.lines.length * size * LINE_FACTOR <= zone.h) break;
-  }
-  return { size, lines: wrapped ? Math.max(1, wrapped.lines.length) : 1 };
-}
-
 // Panels are edited in a contenteditable that shows real (transparent) bold/
 // underline instead of the literal ** and __ markers, so the caret tracks the
 // rendered glyphs. We convert between the marker string (state/canvas/share)
 // and HTML on the way in/out.
 const PANEL_IDS = ["inTop", "inMid", "inBot"];
-function escapeHtmlText(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-function markersToHtml(str) {
-  return (str || "").split("\n").map((line) =>
-    parseRich(line).map((r) => {
-      let h = escapeHtmlText(r.text);
-      if (r.underline) h = `<u>${h}</u>`;
-      if (r.bold) h = `<b>${h}</b>`;
-      return h;
-    }).join("")
-  ).join("<br>");
-}
-function htmlToMarkers(root) {
-  let out = "", curB = false, curU = false;
-  const close = () => { if (curB) { out += "**"; curB = false; } if (curU) { out += "__"; curU = false; } };
-  const emit = (text, b, u) => {
-    if (!text) return;
-    if (b !== curB) { out += "**"; curB = b; }
-    if (u !== curU) { out += "__"; curU = u; }
-    out += text;
-  };
-  const walk = (node, b, u) => {
-    node.childNodes.forEach((ch) => {
-      if (ch.nodeType === 3) {
-        ch.nodeValue.split("\n").forEach((part, i) => { if (i) { close(); out += "\n"; } emit(part, b, u); });
-        return;
-      }
-      if (ch.nodeType !== 1) return;
-      const tag = ch.tagName.toLowerCase();
-      if (tag === "br") { close(); out += "\n"; return; }
-      let nb = b, nu = u;
-      if (tag === "b" || tag === "strong") nb = true;
-      if (tag === "u" || tag === "ins") nu = true;
-      const stl = (ch.getAttribute && ch.getAttribute("style")) || "";
-      if (/font-weight\s*:\s*(bold|[6-9]00)/i.test(stl)) nb = true;
-      if (/text-decoration[^;]*underline/i.test(stl)) nu = true;
-      if ((tag === "div" || tag === "p") && out && !out.endsWith("\n")) { close(); out += "\n"; }
-      walk(ch, nb, nu);
-    });
-  };
-  walk(root, false, false);
-  close();
-  return out.replace(/\n+$/, "");
-}
 // Refresh a panel's HTML from its marker string, unless the user is editing it.
 function setPanelHtml(id, markers) {
   const e = el(id);
@@ -1077,13 +509,13 @@ function layoutOneOverlay(cnv, overlay, hotspotId, mode, ids) {
     lh.style.width = hz.w * scale + "px";
     lh.style.height = hz.h * scale + "px";
     lh.style.fontSize = hz.w * scale * 0.3 + "px";
-    lh.classList.toggle("has-logo", !!state.logo.dataUrl);
+    lh.classList.toggle("has-logo", !!editLogo().dataUrl);
   }
 }
 
 function layoutOverlay() {
   if (!cardOverlay) return;
-  if (state.kind === "protocol") {
+  if (isLandscapeKind(state.kind)) {
     layoutOneOverlay(canvas, cardOverlay, "logoHotspot", "front", FRONT_IDS);
     layoutOneOverlay(canvasBack, cardOverlayBack, "logoHotspotBack", "back", BACK_IDS);
   } else {
@@ -1102,7 +534,7 @@ if (cardOverlay && typeof ResizeObserver !== "undefined") {
 // logo hotspot to the canvas so pan/zoom works over any zone.
 function syncOverlayPanning(e) {
   const on = !!e.shiftKey;
-  const movable = on && (state.bg.type !== "none" || !!state.logo.dataUrl);
+  const movable = on && (editBg().type !== "none" || !!editLogo().dataUrl);
   [cardOverlay, cardOverlayBack].forEach((o) => o && o.classList.toggle("panning", on));
   [canvas, canvasBack].forEach((c) => c && c.classList.toggle("shift-grab", movable));
 }
@@ -1113,40 +545,6 @@ window.addEventListener("blur", () => {
   [canvas, canvasBack].forEach((c) => c && c.classList.remove("shift-grab"));
 });
 
-/* ---------------- IndexedDB key-value store ----------------
-   localStorage caps at ~5MB, which a few cards with custom images blow past.
-   IndexedDB holds far more, so deck + current state live here. */
-const DB_NAME = "deckbuilder";
-const DB_STORE = "kv";
-let dbPromise = null;
-function openDB() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return dbPromise;
-}
-async function idbGet(key) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const r = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).get(key);
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
-  });
-}
-async function idbSet(key, val) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DB_STORE, "readwrite");
-    tx.objectStore(DB_STORE).put(val, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
 /* ---------------- Image pool (content-addressed) ----------------
    Uploaded backgrounds are large. Without pooling, "different background per card"
    stores a full copy of the image on every card AND rewrites them all on each
@@ -1156,7 +554,6 @@ async function idbSet(key, val) {
    model still uses inline dataUrls (render is unchanged); pooling happens only at
    the IndexedDB read/write boundary. */
 const imgCache = new Map(); // "img:<hash>" -> dataUrl
-function imgKey(dataUrl) { return "img:" + (hashStr(dataUrl) >>> 0).toString(36) + "_" + dataUrl.length; }
 async function poolPut(dataUrl) {
   const key = imgKey(dataUrl);
   if (!imgCache.has(key)) {
@@ -1269,20 +666,12 @@ async function loadCurrent() {
 // Merge a loaded/imported card state with current defaults (back-compat).
 function normalizeState(s) {
   const st = Object.assign(defaultState(), s);
-  st.bg = Object.assign({ type: "none", name: null, dataUrl: null }, s.bg || {});
-  st.bg.transform = Object.assign(defaultTransform(), st.bg.transform || {});
-  migrateBg(st.bg);
-  st.logo = Object.assign({ dataUrl: null, zoom: 1 }, s.logo || {});
+  st.bg = hydrateBg(s.bg);
+  st.logo = hydrateLogo(s.logo);
   st.kind = s.kind === "protocol" ? "protocol" : "compile"; // landscape="protocol", value="compile" (default)
   st.compile = Object.assign(defaultCompile(), s.compile || {});
-  st.bgOwn = Object.assign(defaultBg(), s.bgOwn || {});
-  st.bgOwn.transform = Object.assign(defaultTransform(), st.bgOwn.transform || {});
-  migrateBg(st.bgOwn);
-  if (s.bgOwnBack) { // separate back-face bg (compile cards, per-card mode)
-    st.bgOwnBack = Object.assign(defaultBg(), s.bgOwnBack);
-    st.bgOwnBack.transform = Object.assign(defaultTransform(), st.bgOwnBack.transform || {});
-    migrateBg(st.bgOwnBack);
-  }
+  st.bgOwn = hydrateBg(s.bgOwn);
+  if (s.bgOwnBack) st.bgOwnBack = hydrateBg(s.bgOwnBack); // separate back-face bg (compile cards, per-card mode)
   return st;
 }
 
@@ -1303,7 +692,7 @@ async function loadDeck() {
 function saveDeck() {
   idbSetPooled("deck", deck).catch((e) => {
     console.error("saveDeck failed", e);
-    alert("Could not save the deck. Your browser storage may be full or blocked.");
+    notify("Could not save the deck. Your browser storage may be full or blocked.");
   });
 }
 
@@ -1320,11 +709,7 @@ function titleFromCards(cards) {
 // Normalise an arbitrary {bg, logo} into a complete shared entry.
 function normalizeShared(src) {
   const s = src || {};
-  const bg = Object.assign(defaultBg(), s.bg || {});
-  bg.transform = Object.assign(defaultTransform(), bg.transform || {});
-  migrateBg(bg);
-  const logo = Object.assign(defaultLogo(), s.logo || {});
-  return { bg, logo };
+  return { bg: hydrateBg(s.bg), logo: hydrateLogo(s.logo) };
 }
 function setDeckShared(src) {
   resetShared();
@@ -1408,7 +793,7 @@ function propagateTitle() {
 const el = (id) => document.getElementById(id);
 
 function syncFormToState() {
-  state.title = el("inTitle").value;
+  setEditTitle(el("inTitle").value);
   state.value = el("inValue").value;
   state.panelTop = htmlToMarkers(el("inTop"));
   state.panelMid = htmlToMarkers(el("inMid"));
@@ -1421,8 +806,8 @@ function syncFormToState() {
 }
 
 function syncStateToForm() {
-  el("inTitle").value = state.title;
-  el("inTitleBack").value = state.title;
+  el("inTitle").value = editTitle();
+  el("inTitleBack").value = editTitle();
   el("inValue").value = state.value;
   setPanelHtml("inTop", state.panelTop);
   setPanelHtml("inMid", state.panelMid);
@@ -1447,7 +832,7 @@ function syncStateToForm() {
 // Show/hide the two card types' fields and update the type/side toggles.
 // kind "protocol" = the landscape "Protocol card"; "compile" = the vertical "Compile card".
 function applyKind() {
-  const isLandscape = state.kind === "protocol";
+  const isLandscape = isLandscapeKind(state.kind);
   document.querySelectorAll(".protocol-only").forEach((e) => { e.hidden = isLandscape; });  // .protocol-only = value-card fields
   document.querySelectorAll(".compile-only").forEach((e) => { e.hidden = !isLandscape; });  // .compile-only = landscape fields
   el("btnKindProtocol").classList.toggle("active", isLandscape);   // "Protocol card" button
@@ -1455,34 +840,34 @@ function applyKind() {
 }
 
 function refreshLogoUI() {
-  const has = !!state.logo.dataUrl;
+  const has = !!editLogo().dataUrl;
   el("btnClearLogo").hidden = !has;
   const prev = el("logoPreview");
   prev.hidden = !has;
-  if (has) prev.src = state.logo.dataUrl;
+  if (has) prev.src = editLogo().dataUrl;
   el("logoAdjust").hidden = !has;
-  const pct = Math.round((state.logo.zoom || 1) * 100);
+  const pct = Math.round((editLogo().zoom || 1) * 100);
   el("inLogoZoom").value = pct;
   el("logoZoomVal").textContent = pct + "%";
 }
 
 function refreshBgSelection() {
   document.querySelectorAll(".bg-thumb").forEach((t) => {
-    const isPreset = state.bg.type === "preset" && t.dataset.name === state.bg.name;
-    const isCustom = state.bg.type === "custom" && !!t.dataset.url && t.dataset.url === state.bg.dataUrl;
+    const isPreset = editBg().type === "preset" && t.dataset.name === editBg().name;
+    const isCustom = editBg().type === "custom" && !!t.dataset.url && t.dataset.url === editBg().dataUrl;
     t.classList.toggle("active", Boolean(isPreset || isCustom)); // explicit boolean: undefined would TOGGLE
   });
 }
 
 /* ---------------- Background pan & zoom ---------------- */
 function bgTransform() {
-  if (!state.bg.transform) state.bg.transform = defaultTransform();
-  return state.bg.transform;
+  if (!editBg().transform) editBg().transform = defaultTransform();
+  return editBg().transform;
 }
 
 // Show the adjust controls only when a background is set, and reflect the zoom.
 function syncBgAdjust() {
-  const on = state.bg.type !== "none";
+  const on = editBg().type !== "none";
   el("bgAdjust").hidden = !on;
   const pct = Math.round(clampScale(bgTransform().scale) * 100);
   el("inBgZoom").value = pct;
@@ -1521,14 +906,14 @@ const panZoomKey = (e) => e.shiftKey;
 // Hexagon zone for a given canvas (back canvas → compile back hex).
 function hexForCanvas(cnv) {
   if (cnv === canvasBack) return COMPILE_BACK.hex;
-  return state.kind === "protocol" ? COMPILE_FRONT.hex : ZONES.hex;
+  return isLandscapeKind(state.kind) ? COMPILE_FRONT.hex : ZONES.hex;
 }
 function pointOn(cnv, e) {
   const r = cnv.getBoundingClientRect(), f = scaleFactor(cnv);
   return { x: (e.clientX - r.left) * f, y: (e.clientY - r.top) * f };
 }
 function overLogoOn(cnv, e) {
-  if (!state.logo.dataUrl) return false;
+  if (!editLogo().dataUrl) return false;
   const h = hexForCanvas(cnv), p = pointOn(cnv, e);
   return p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h;
 }
@@ -1555,7 +940,7 @@ function attachPanZoom(cnv) {
     if (!panZoomKey(e)) return;
     const onLogo = overLogoOn(cnv, e);
     if (!onLogo) selectBgFaceForCanvas(cnv); // dragging the back canvas edits the back bg
-    if (!onLogo && state.bg.type === "none") return; // nothing to drag
+    if (!onLogo && editBg().type === "none") return; // nothing to drag
     e.preventDefault();
     dragging = true; dragTarget = onLogo ? "logo" : "bg"; dragCanvas = cnv;
     lastPX = e.clientX; lastPY = e.clientY;
@@ -1567,8 +952,8 @@ function attachPanZoom(cnv) {
     const f = scaleFactor(cnv);
     const dx = (e.clientX - lastPX) * f, dy = (e.clientY - lastPY) * f;
     if (dragTarget === "logo") {
-      state.logo.offsetX = (state.logo.offsetX || 0) + dx;
-      state.logo.offsetY = (state.logo.offsetY || 0) + dy;
+      editLogo().offsetX = (editLogo().offsetX || 0) + dx;
+      editLogo().offsetY = (editLogo().offsetY || 0) + dy;
     } else {
       const t = bgTransform();
       t.offsetX += dx; t.offsetY += dy;
@@ -1590,11 +975,11 @@ function attachPanZoom(cnv) {
     if (!panZoomKey(e)) return;
     const onLogo = overLogoOn(cnv, e);
     if (!onLogo) selectBgFaceForCanvas(cnv);
-    if (!onLogo && state.bg.type === "none") return;
+    if (!onLogo && editBg().type === "none") return;
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
     if (onLogo) {
-      state.logo.zoom = clampLogoZoom((state.logo.zoom || 1) * factor);
+      editLogo().zoom = clampLogoZoom((editLogo().zoom || 1) * factor);
       refreshLogoUI();
     } else {
       const p = pointOn(cnv, e);
@@ -1638,16 +1023,16 @@ PANEL_IDS.forEach((id) => {
 });
 // Logo zoom
 el("inLogoZoom").addEventListener("input", () => {
-  state.logo.zoom = Math.max(0.5, Math.min(3, +el("inLogoZoom").value / 100));
-  el("logoZoomVal").textContent = Math.round(state.logo.zoom * 100) + "%";
+  editLogo().zoom = Math.max(0.5, Math.min(3, +el("inLogoZoom").value / 100));
+  el("logoZoomVal").textContent = Math.round(editLogo().zoom * 100) + "%";
   scheduleRender(false);
   debouncedSave();
   propagateShared();
 });
 el("btnLogoReset").addEventListener("click", () => {
-  state.logo.zoom = 1;
-  state.logo.offsetX = 0;
-  state.logo.offsetY = 0;
+  editLogo().zoom = 1;
+  editLogo().offsetX = 0;
+  editLogo().offsetY = 0;
   refreshLogoUI();
   scheduleRender();
   propagateShared();
@@ -1722,17 +1107,17 @@ el("inLogo").addEventListener("change", (e) => {
   const reader = new FileReader();
   reader.onload = async () => {
     try {
-      state.logo.dataUrl = await normalizeImage(reader.result, 320, 320, "image/png");
+      editLogo().dataUrl = await normalizeImage(reader.result, 320, 320, "image/png");
       refreshLogoUI();
       scheduleRender();
       propagateShared();
-    } catch (err) { alert("Could not read that image file."); }
+    } catch (err) { notify("Could not read that image file."); }
   };
   reader.readAsDataURL(file);
   e.target.value = "";
 });
 el("btnClearLogo").addEventListener("click", () => {
-  state.logo.dataUrl = null;
+  editLogo().dataUrl = null;
   refreshLogoUI();
   scheduleRender();
   propagateShared();
@@ -1757,12 +1142,12 @@ el("inBg").addEventListener("change", (e) => {
     selectBg({ type: "custom", dataUrl }); // set as the single shared bg (kept if the split is cancelled)
     openMosaic({ src: dataUrl });           // offer to split it across the cards
   };
-  reader.onerror = () => alert("Could not read that image file.");
+  reader.onerror = () => notify("Could not read that image file.");
   reader.readAsDataURL(file);
   e.target.value = "";
 });
 el("btnNoBg").addEventListener("click", () => {
-  state.bg = { type: "none", name: null, dataUrl: null, transform: defaultTransform() };
+  setEditBg({ type: "none", name: null, dataUrl: null, transform: defaultTransform() });
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
@@ -1779,7 +1164,7 @@ el("inBgZoom").addEventListener("input", () => {
 });
 // Reset pan & zoom
 el("btnBgReset").addEventListener("click", () => {
-  state.bg.transform = defaultTransform();
+  editBg().transform = defaultTransform();
   syncBgAdjust();
   scheduleRender();
   propagateBg();
@@ -1921,7 +1306,7 @@ el("btnBgBack").addEventListener("click", () => setBgEditSide("back"));
 // Background grid: uploaded customs first, then the bundled presets.
 let customBgs = [];
 function selectBg(bg) {
-  state.bg = Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, bg);
+  setEditBg(Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, bg));
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
@@ -1942,7 +1327,7 @@ function buildBgGrid() {
         e.stopPropagation();
         customBgs = customBgs.filter((u) => u !== url);
         saveCustomBgs();
-        if (state.bg.type === "custom" && state.bg.dataUrl === url) selectBg({ type: "none" });
+        if (editBg().type === "custom" && editBg().dataUrl === url) selectBg({ type: "none" });
         buildBgGrid();
         refreshBgSelection();
         return;
@@ -1973,7 +1358,6 @@ function saveCustomBgs() {
 /* ---------------- Mosaic splitter: lay one image across the 6 value cards ----------------
    Upload one image, frame a 3×2 grid over it (drag + zoom), and on accept each cell
    becomes one card's per-card background (cropped to that region, in value order). */
-const MOSAIC_ASPECT = (3 * CARD_W) / (2 * CARD_H); // 3 wide × 2 tall, card-aspect cells
 let mosaicT = { s: 1, tx: 0, ty: 0 }; // image transform within the stage
 let mosaicFit = 1;                    // the "cover the frame" scale (slider = 100%)
 let mosaicSrc = "";                   // dataUrl of the loaded image
@@ -2052,7 +1436,7 @@ function mosaicEmptyState() {
 function openMosaic(opts) {
   opts = opts || {};
   el("mosaicOverlay").hidden = false;
-  const bg = state.bg || {};
+  const bg = editBg() || {};
   const splitSrc = (deckShared.split && deckShared.split.dataUrl) || null;
   if (opts.src) { loadMosaicImage(opts.src); return; }                                  // a freshly uploaded image
   // A newly-selected background wins over any saved split, so you can re-split with a
@@ -2068,12 +1452,6 @@ function openMosaic(opts) {
   mosaicEmptyState();                                                                   // nothing to split yet — upload inside the modal
 }
 function closeMosaic() { el("mosaicOverlay").hidden = true; }
-// The card-render transform that makes a 744×1039 card show image region (ix,iy,cw,ch).
-function cellTransform(iw, ih, ix, iy, cw, ch) {
-  const s = CARD_W / cw; // image px → card px
-  const base = Math.max(CARD_W / iw, CARD_H / ih);
-  return { scale: s / base, offsetX: -ix * s - (CARD_W - iw * s) / 2, offsetY: -iy * s - (CARD_H - ih * s) / 2 };
-}
 // Background for one mosaic cell at grid position `pos` (0=top-left … 5=bottom-right), from the saved split.
 function splitCellBg(pos) {
   const sp = deckShared.split;
@@ -2081,12 +1459,6 @@ function splitCellBg(pos) {
   const cw = sp.w / 3, ch = sp.h / 2, c = pos % 3, r = Math.floor(pos / 3);
   return { type: "custom", name: null, dataUrl: sp.dataUrl,
            transform: cellTransform(sp.iw, sp.ih, sp.ix0 + c * cw, sp.iy0 + r * ch, cw, ch) };
-}
-function sameBg(a, b) {
-  return !!a && !!b && a.dataUrl === b.dataUrl && !!a.transform && !!b.transform &&
-    Math.abs(a.transform.offsetX - b.transform.offsetX) < 0.5 &&
-    Math.abs(a.transform.offsetY - b.transform.offsetY) < 0.5 &&
-    Math.abs(a.transform.scale - b.transform.scale) < 1e-4;
 }
 // Split mode: each value card shows the cell for its POSITION (1st value card →
 // top-left … 6th → bottom-right). Idempotent — only touches a card whose cell
@@ -2142,7 +1514,7 @@ el("inMosaicImg").addEventListener("change", (e) => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = () => loadMosaicImage(reader.result); // full quality, no recompression
-  reader.onerror = () => alert("Could not read that image file.");
+  reader.onerror = () => notify("Could not read that image file.");
   reader.readAsDataURL(file); e.target.value = "";
 });
 (function () { // drag to pan + scroll to zoom inside the stage
@@ -2177,6 +1549,30 @@ function downloadCanvas(cnv, filename) {
   }, "image/png");
 }
 
+// The faces a card exports: the landscape Protocol card has two (front + back);
+// a vertical value card has one.
+function facesOf(state) { return isLandscapeKind(state.kind) ? ["front", "back"] : ["front"]; }
+
+// Render one face of a card to a print-size (poker) PNG canvas at the export dpi.
+async function renderCardCanvas(state, side) {
+  const off = document.createElement("canvas");
+  await renderKind(state, off, { side, hq: true, scale: exportScale });
+  return toPoker(off, exportScale);
+}
+
+// Download every face of a card. `base` is the filename stem; a two-faced card
+// gets _front/_back suffixes, a single-faced card keeps the plain name. Multi-file
+// downloads are paced so the browser doesn't drop them.
+async function downloadCardFaces(state, base) {
+  const faces = facesOf(state);
+  for (let i = 0; i < faces.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 350));
+    const side = faces[i];
+    const suffix = faces.length > 1 ? "_" + side : "";
+    downloadCanvas(await renderCardCanvas(state, side), safeName(base) + suffix + ".png");
+  }
+}
+
 /* ---------------- Deck ---------------- */
 let idCounter = 0;
 function newId() {
@@ -2186,8 +1582,7 @@ function newId() {
 
 async function makeThumb(st) {
   const off = document.createElement("canvas");
-  if (st.kind === "protocol") await renderCompileLandscape(st, "front", off); // 1039×744 landscape
-  else { off.width = CARD_W; off.height = CARD_H; await renderCard(st, off); }
+  await renderKind(st, off); // landscape (protocol) or vertical (compile), sized by the renderer
   const tw = 240;
   const t = document.createElement("canvas");
   t.width = tw;
@@ -2339,16 +1734,7 @@ function setEditing(id) {
 // asc. Freshly-added cards (_new) stay pinned at the end until the deck is saved,
 // so a blank card you're composing doesn't jump around by value while you type.
 function sortDeck() {
-  deck.sort((a, b) => {
-    const pa = a.state.kind === "protocol" ? 0 : 1;
-    const pb = b.state.kind === "protocol" ? 0 : 1;
-    if (pa !== pb) return pa - pb;
-    if (pa === 0) return 0;
-    const na = a._new ? 1 : 0, nb = b._new ? 1 : 0;
-    if (na !== nb) return na - nb; // new (unsaved) cards last
-    if (na === 1) return 0;        // keep insertion order among new cards
-    return (parseFloat(a.state.value) || 0) - (parseFloat(b.state.value) || 0);
-  });
+  deck.sort(compareDeckEntries);
 }
 
 function renderDeck() {
@@ -2414,10 +1800,8 @@ function dupCard(id) {
 }
 
 async function dlCard(card) {
-  const off = document.createElement("canvas");
-  if (card.state.kind === "protocol") await renderCompileLandscape(card.state, "front", off, true, exportScale);
-  else await renderCard(card.state, off, true, exportScale);
-  downloadCanvas(toPoker(off, exportScale), safeName(deckShared.title || card.state.value || "card") + ".png");
+  // Protocol (landscape) cards export both faces; value cards, just the one.
+  await downloadCardFaces(card.state, deckShared.title || card.state.value || "card");
 }
 
 /* ---------------- Modal (confirm / prompt / share) ---------------- */
@@ -2435,12 +1819,18 @@ function showModal(opts) {
   conf.classList.toggle("btn-danger", !!o.danger);
   conf.classList.toggle("btn-primary", !o.danger);
   el("modalCancel").textContent = o.cancelLabel;
+  el("modalCancel").hidden = !!o.okOnly; // notices show a single OK button
   el("modalOverlay").hidden = false;
   if (o.input) setTimeout(() => { inp.focus(); inp.select(); }, 30);
   return new Promise((resolve) => { modalResolve = resolve; });
 }
 function showConfirm({ title, body, confirmLabel = "Delete", danger = true }) {
   return showModal({ title, body, confirmLabel, danger });
+}
+// Styled replacement for window.alert: a single-OK notice in the app's modal.
+// Fire-and-forget (callers don't await); returns the modal promise if needed.
+function notify(message, title = "") {
+  return showModal({ title, body: message, confirmLabel: "OK", okOnly: true, danger: false });
 }
 function closeModal(ok) {
   const inp = el("modalInput");
@@ -2532,7 +1922,7 @@ function upsertSavedDeck(name) {
 // Persist the working deck into the "My decks" library, prompting for a name if it
 // has none yet. Returns true on success, false if empty or the user cancelled.
 async function saveDeckToLibrary() {
-  if (!deck.length) { alert("The deck is empty — add some cards first."); return false; }
+  if (!deck.length) { notify("The deck is empty — add some cards first."); return false; }
   let name = el("inDeckName").value.trim();
   if (!name) {
     name = await showModal({ title: "Save deck", body: "Name this deck:", input: true, value: currentDeckName || "My deck", confirmLabel: "Save", danger: false });
@@ -2640,28 +2030,12 @@ async function gunzipToStr(bytes) {
   w.write(bytes); w.close();
   return new TextDecoder().decode(await new Response(ds.readable).arrayBuffer());
 }
-function bytesToB64url(bytes) {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function b64urlToBytes(b64) {
-  b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
-  while (b64.length % 4) b64 += "=";
-  const bin = atob(b64);
-  const u = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-  return u;
-}
-
 // Expand a shared {bg, logo} entry, resolving pooled image indexes to data URLs.
 function expandShareImgs(entry, imgs) {
   const e = entry || {};
-  const bg = Object.assign(defaultBg(), e.bg || {});
-  bg.transform = Object.assign(defaultTransform(), bg.transform || {});
+  const bg = hydrateBg(e.bg);
   if (e.bg && typeof e.bg.img === "number") bg.dataUrl = imgs[e.bg.img];
-  migrateBg(bg);
-  const logo = Object.assign(defaultLogo(), e.logo || {});
+  const logo = hydrateLogo(e.logo);
   if (e.logo && typeof e.logo.img === "number") logo.dataUrl = imgs[e.logo.img];
   delete bg.img; delete logo.img;
   return { bg, logo };
@@ -2773,7 +2147,7 @@ async function buildShareJson(name) {
 }
 
 el("btnExport").addEventListener("click", async () => {
-  if (!deck.length) { alert("The deck is empty."); return; }
+  if (!deck.length) { notify("The deck is empty."); return; }
   const btn = el("btnExport");
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
   let url, viaService = false;
@@ -2808,13 +2182,7 @@ el("btnExport").addEventListener("click", async () => {
 
 // Order: the Protocol card (landscape) first, then the rest by value ascending.
 function sortDeckStates(states) {
-  return states.slice().sort((a, b) => {
-    const pa = a.kind === "protocol" ? 0 : 1; // kind "protocol" = landscape = the "Protocol card"
-    const pb = b.kind === "protocol" ? 0 : 1;
-    if (pa !== pb) return pa - pb;
-    if (pa === 0) return 0;
-    return (parseFloat(a.value) || 0) - (parseFloat(b.value) || 0);
-  });
+  return states.slice().sort(compareCardStates);
 }
 
 // On load: if the URL carries a shared deck, show it in a gallery (view or import).
@@ -2838,7 +2206,7 @@ async function checkSharedDeck() {
       try { json = await gunzipToStr(bytes); } catch (e) { json = new TextDecoder().decode(bytes); }
       data = JSON.parse(json);
     }
-  } catch (e) { console.warn("Shared deck load failed:", e); el("shareView").hidden = true; alert("This shared deck could not be loaded (the link may be invalid or expired)."); return; }
+  } catch (e) { console.warn("Shared deck load failed:", e); el("shareView").hidden = true; notify("This shared deck could not be loaded (the link may be invalid or expired)."); return; }
   flipPayloadKinds(data); // legacy share format → coherent in-memory kinds
   const name = (data && data.name) || "Shared deck";
   const imgs = (data && Array.isArray(data.imgs)) ? data.imgs : [];
@@ -2859,17 +2227,15 @@ async function checkSharedDeck() {
       const k = st.kind === "protocol" ? "protocol" : "compile"; // shared key matches the card's kind
       st._shared = { title: expandedShared.title, code, perCardBg, glitchPreset, bg: expandedShared[k].bg, logo: expandedShared[k].logo };
       if (card.bg) { // per-card background (perCardBg mode)
-        const bg = Object.assign(defaultBg(), card.bg);
-        bg.transform = Object.assign(defaultTransform(), card.bg.transform || {});
+        const bg = hydrateBg(card.bg);
         if (typeof card.bg.img === "number") bg.dataUrl = imgs[card.bg.img];
-        migrateBg(bg); delete bg.img;
+        delete bg.img;
         st.bgOwn = bg;
       }
       if (card.bgBack) { // separate back-face bg
-        const bg = Object.assign(defaultBg(), card.bgBack);
-        bg.transform = Object.assign(defaultTransform(), card.bgBack.transform || {});
+        const bg = hydrateBg(card.bgBack);
         if (typeof card.bgBack.img === "number") bg.dataUrl = imgs[card.bgBack.img];
-        migrateBg(bg); delete bg.img;
+        delete bg.img;
         st.bgOwnBack = bg;
       }
       return st;
@@ -2877,9 +2243,9 @@ async function checkSharedDeck() {
   } else if (data && data.v === 2 && Array.isArray(data.imgs)) {
     // v2: images deduplicated in data.imgs, referenced per card.
     states = (data.cards || []).map((card) => {
-      const bg = Object.assign(defaultBg(), card.bg || {});
+      const bg = hydrateBg(card.bg);
       if (card.bg && typeof card.bg.img === "number") bg.dataUrl = imgs[card.bg.img];
-      const logo = Object.assign(defaultLogo(), card.logo || {});
+      const logo = hydrateLogo(card.logo);
       if (card.logo && typeof card.logo.img === "number") logo.dataUrl = imgs[card.logo.img];
       const st = normalizeState(Object.assign({}, card, { bg, logo }));
       st._shared = { title: st.title, bg: st.bg, logo: st.logo };
@@ -2917,8 +2283,7 @@ async function renderFrontImage(st, side) {
   const off = document.createElement("canvas");
   // Render at 2× with the high-quality downscale so the gallery looks crisp on
   // hi-dpi screens (it's shown large, especially the Protocol card).
-  if (st.kind === "protocol") await renderCompileLandscape(st, side || "front", off, true, 2);
-  else await renderCard(st, off, true, 2);
+  await renderKind(st, off, { side: side || "front", hq: true, scale: 2 });
   return off.toDataURL("image/jpeg", 0.92);
 }
 
@@ -2999,17 +2364,15 @@ async function delCard(id) {
 
 // Download all
 el("btnDownloadAll").addEventListener("click", async () => {
-  if (deck.length === 0) { alert("The deck is empty."); return; }
+  if (deck.length === 0) { notify("The deck is empty."); return; }
   const btn = el("btnDownloadAll");
   btn.disabled = true;
   const original = btn.textContent;
   for (let i = 0; i < deck.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 350)); // pace between cards
     btn.textContent = `${i + 1}/${deck.length}…`;
-    const off = document.createElement("canvas");
-    if (deck[i].state.kind === "protocol") await renderCompileLandscape(deck[i].state, "front", off, true, exportScale);
-    else await renderCard(deck[i].state, off, true, exportScale);
-    downloadCanvas(toPoker(off, exportScale), String(i + 1).padStart(2, "0") + "_" + safeName(deckShared.title || "card") + ".png");
-    await new Promise((r) => setTimeout(r, 350)); // let the browser process each download
+    // Each card downloads all its faces (Protocol → front + back).
+    await downloadCardFaces(deck[i].state, String(i + 1).padStart(2, "0") + "_" + (deckShared.title || "card"));
   }
   btn.textContent = original;
   btn.disabled = false;
@@ -3061,9 +2424,9 @@ function cropMarks(pdf, mx, my, W, H, cols, rows) {
 }
 
 el("btnExportPDF").addEventListener("click", async () => {
-  if (deck.length === 0) { alert("The deck is empty."); return; }
+  if (deck.length === 0) { notify("The deck is empty."); return; }
   const jsPDFCtor = window.jspdf && window.jspdf.jsPDF;
-  if (!jsPDFCtor) { alert("PDF library failed to load."); return; }
+  if (!jsPDFCtor) { notify("PDF library failed to load."); return; }
   const btn = el("btnExportPDF");
   const original = btn.textContent;
   btn.disabled = true;
@@ -3109,7 +2472,7 @@ el("btnExportPDF").addEventListener("click", async () => {
     pdf.save("compiler-deck.pdf");
   } catch (e) {
     console.error(e);
-    alert("Could not generate the PDF: " + e.message);
+    notify("Could not generate the PDF: " + e.message);
   } finally {
     btn.textContent = original;
     btn.disabled = false;
@@ -3118,7 +2481,7 @@ el("btnExportPDF").addEventListener("click", async () => {
 
 // Export / import deck JSON
 el("btnExportDeck").addEventListener("click", () => {
-  if (deck.length === 0) { alert("The deck is empty."); return; }
+  if (deck.length === 0) { notify("The deck is empty."); return; }
   // Lossless + deduplicated: original full-res images are kept verbatim (no
   // re-encode) but pooled once into `imgs`, so a 6-cell mosaic source isn't
   // written 7×. This is the max-quality path for printing / moving a deck.
@@ -3168,7 +2531,7 @@ el("inImportDeck").addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       let data = JSON.parse(reader.result);
       // v3 export file: images are pooled in `imgs` — restore the full-res originals.
@@ -3181,7 +2544,11 @@ el("inImportDeck").addEventListener("change", (e) => {
       flipPayloadKinds(data); // legacy file kind format → coherent in-memory kinds
       const cards = Array.isArray(data) ? data : data.cards;
       if (!Array.isArray(cards)) throw new Error("Invalid format");
-      const replace = deck.length === 0 || confirm("Replace the current deck? (Cancel = append to the end)");
+      const replace = deck.length === 0 || await showModal({
+        title: "Import deck",
+        body: "Replace the current deck? (Cancel = append to the end.)",
+        confirmLabel: "Replace", cancelLabel: "Append to end", danger: false,
+      });
       withDeckLoading(async () => {
         const normalized = cards.map((c) => ({
           id: newId(),
@@ -3202,7 +2569,7 @@ el("inImportDeck").addEventListener("change", (e) => {
         await regenMissingThumbs(); renderDeck();
       });
     } catch (err) {
-      alert("Could not import the deck: " + err.message);
+      notify("Could not import the deck: " + err.message);
     }
   };
   reader.readAsText(file);

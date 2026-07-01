@@ -1,0 +1,18 @@
+{
+  "name": "compiler-card-builder",
+  "version": "1.0.0",
+  "description": "Static card builder / deckbuilder — vanilla ES modules, no build step required to run.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "build": "esbuild app.js --bundle --format=esm --minify --sourcemap --outfile=dist/app.min.js",
+    "check": "esbuild app.js --bundle --format=esm --outfile=/dev/null"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "vitest": "^2.1.0"
+  }
+}
