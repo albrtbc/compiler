@@ -1094,7 +1094,14 @@ if (selToolbar) selToolbar.querySelectorAll(".rt-btn").forEach((b) => {
   b.addEventListener("click", () => {
     const e = el(lastPanel);
     e.focus();
+    // Our canvas-matched CSS renders <b>/<u> without native font-weight/underline,
+    // so queryCommandState() — and thus execCommand's toggle — can't see existing
+    // formatting and could never turn it OFF. Briefly restore native styling and
+    // force a reflow so execCommand toggles correctly, then revert.
+    e.classList.add("rt-native");
+    void e.offsetHeight;
     document.execCommand(b.dataset.mark === "**" ? "bold" : "underline");
+    e.classList.remove("rt-native");
     e.dispatchEvent(new Event("input"));
     updateSelToolbar();
   });
@@ -1862,25 +1869,32 @@ async function loadSavedDecks() {
 function saveSavedDecks() { idbSetPooled("savedDecks", savedDecks).catch((e) => console.warn("saveSavedDecks", e)); }
 function saveDeckMeta() { idbSet("currentDeckMeta", { id: currentDeckId, name: currentDeckName, dirty: deckDirty }).catch(() => {}); }
 
-// The background used by a deck (first card that has one) for its row thumbnail.
+// The saved-deck row thumbnail always tracks the Protocol card's FRONT background.
 function deckBgSrc(d) {
   const fromBg = (bg) => {
     if (bg && bg.type === "preset" && bg.name) return `card-backgrounds/thumbs/${bg.name}.jpg`;
     if (bg && bg.type === "custom" && bg.dataUrl) return bg.dataUrl;
     return null;
   };
-  // New model: background lives in the per-kind shared block.
+  const perCard = !!(d.shared && d.shared.perCardBg);
+  // Per-card / split mode: the Protocol card carries its own front bg (bgOwn), which
+  // a split overrides — read it directly so the row reflects the split image.
+  if (perCard) {
+    const proto = (d.cards || []).find((c) => c.state && c.state.kind === "protocol");
+    const src = proto && fromBg(proto.state.bgOwn);
+    if (src) return src;
+  }
+  // Shared mode (or fallback): the per-kind shared background — Protocol first.
   if (d.shared) {
-    for (const kind of ["compile", "protocol"]) {
+    for (const kind of ["protocol", "compile"]) {
       const src = d.shared[kind] && fromBg(d.shared[kind].bg);
       if (src) return src;
     }
   }
-  // Per-card backgrounds (perCardBg mode), then the old per-card model.
-  const usePer = !!(d.shared && d.shared.perCardBg);
+  // Legacy per-card model.
   for (const c of d.cards || []) {
     const st = c.state || {};
-    const src = fromBg(usePer ? st.bgOwn : st.bg);
+    const src = fromBg(perCard ? st.bgOwn : st.bg);
     if (src) return src;
   }
   return null;

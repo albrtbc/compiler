@@ -508,6 +508,14 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 .card-overlay .ovl-multiline [style*="font-weight"] { font-weight: normal; font-family: SupermolotB; }
 .card-overlay .ovl-multiline u,
 .card-overlay .ovl-multiline ins { text-decoration: none; }
+/* Briefly toggled on (by the format buttons) to restore NATIVE bold/underline so
+   queryCommandState() sees the real formatting and execCommand can toggle it OFF.
+   Without this the rules above hide bold/underline from the browser, so re-clicking
+   the button could never remove it. Removed again the same tick. */
+.card-overlay .ovl-multiline.rt-native b,
+.card-overlay .ovl-multiline.rt-native strong { font-weight: bold; }
+.card-overlay .ovl-multiline.rt-native u,
+.card-overlay .ovl-multiline.rt-native ins { text-decoration: underline; }
 .card-overlay .ovl::placeholder { color: rgba(255, 255, 255, 0.34); -webkit-text-fill-color: rgba(255, 255, 255, 0.34); }
 .card-overlay .ovl::selection { background: rgba(65, 224, 208, 0.35); }
 .card-overlay .ovl:hover { background: rgba(65, 224, 208, 0.08); box-shadow: inset 0 0 0 1px rgba(65, 224, 208, 0.4); cursor: text; }
@@ -539,7 +547,11 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 }
 .deck-menu { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
 .deck-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 10px; line-height: 1.6; }
-.deck-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+/* align-items:start stops grid items from stretching to the row height. Without
+   it, Chrome resizes the aspect-ratio thumbnail to the (stretched) row height
+   instead of the column width, which pushed the .dc-actions bar out of the
+   overflow:hidden card so the delete/download icons vanished. Firefox was fine. */
+.deck-list { display: grid; grid-template-columns: repeat(2, 1fr); align-items: start; gap: 10px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
 .deck-card {
   border: 1px solid var(--line);
   border-radius: 10px;
