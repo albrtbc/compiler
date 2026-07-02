@@ -25,9 +25,11 @@ Cards are composed from a fixed frame, optional text panels, a background, a lar
   - **My decks** library: save decks by name, load them later, delete. Named decks autosave on every change. Stored locally in **IndexedDB**.
   - **Clear all**, plus **Export** / **Import** the whole deck as a portable `.json`.
   - **Share** a deck as a short link: the deck is gzip-compressed and stored on a free service ([dpaste](https://dpaste.com)); the link opens a read-only gallery where anyone can view or import it. Uploaded images are re-compressed **only here**, so the whole deck fits into the link. (Links expire after ~1 year; for offline/permanent sharing use Export/Import.)
-- **Export** — download a single card, all cards as PNGs, or a **print & play PDF**, at print resolution (**300 dpi**).
-  - The PDF lays out cards **3×3 per A4 page** at standard card size (63 × 88 mm), with
+- **Export** — one menu with every deck export: all cards as PNGs, a **print & play PDF**, or the lossless `.json` (Export / Import); single cards download from their deck tile. All at print resolution (**300 dpi**).
+  - The PDF lays out cards **3×3 per A4 page** at standard card size (63.5 × 88.9 mm), with
     crop marks and a card-back page after each fronts page for double-sided printing.
+  - PDF comes in two flavours: with a **2mm mirrored-edge bleed** around every card (slightly
+    offset cuts show mirrored art instead of white slivers) or edge-to-edge without bleed.
 - **Image quality** — uploaded **backgrounds are kept at full quality**; the card downscales them crisply at draw time, so zooming and mosaic splits stay sharp. Logos are stored as small 320 px PNGs. Images are re-compressed **only** for the share link — never for editing, PNG export or the PDF.
 
 ## Run locally

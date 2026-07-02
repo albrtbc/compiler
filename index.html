@@ -168,13 +168,20 @@
           <input id="inDeckName" type="text" maxlength="50" placeholder="Untitled deck" autocomplete="off" />
         </div>
         <div class="deck-menu">
-          <button id="btnDownloadAll" class="btn btn-sm" type="button">⬇ All</button>
-          <button id="btnExportPDF" class="btn btn-sm" type="button" title="Print &amp; play PDF (3×3, 63.5×88.9mm, with backs)">PDF</button>
-          <button id="btnExportDeck" class="btn btn-sm" type="button">Export</button>
-          <label class="btn btn-sm btn-file">
-            Import
-            <input id="inImportDeck" type="file" accept="application/json,.json" hidden />
-          </label>
+          <div id="exportWrap" class="menu-wrap">
+            <button id="btnExportMenu" class="btn btn-sm" type="button" aria-haspopup="true" aria-expanded="false">
+              <span id="exportMenuLabel">Export</span> <span class="menu-chev">▾</span>
+            </button>
+            <div id="exportMenu" class="dropdown-menu" role="menu">
+              <button id="miDownloadAll" class="dropdown-item" type="button" role="menuitem">Download PNGs<small>every card, Protocol front &amp; back</small></button>
+              <button id="miPdfBleed" class="dropdown-item" type="button" role="menuitem">Print &amp; play PDF<small>2mm mirrored bleed, safer cutting</small></button>
+              <button id="miPdfPlain" class="dropdown-item" type="button" role="menuitem">PDF without bleed<small>edge-to-edge, seamless mosaic</small></button>
+              <div class="dropdown-sep" role="separator"></div>
+              <button id="miExportJson" class="dropdown-item" type="button" role="menuitem">Export deck<small>lossless .json, full quality</small></button>
+              <button id="miImportJson" class="dropdown-item" type="button" role="menuitem">Import deck<small>load a .json file</small></button>
+            </div>
+          </div>
+          <input id="inImportDeck" type="file" accept="application/json,.json" hidden />
           <button id="btnClearDeck" class="btn btn-sm btn-danger" type="button">Clear all</button>
         </div>
 

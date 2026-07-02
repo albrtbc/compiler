@@ -305,6 +305,28 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 .switch input:checked + .switch-slider { background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%); border-color: transparent; }
 .switch input:checked + .switch-slider::after { transform: translateX(16px); background: #04212a; }
 .switch input:focus-visible + .switch-slider { box-shadow: 0 0 0 2px rgba(65, 224, 208, 0.45); }
+
+/* Dropdown menu (Export button): same visual language as the custom selects */
+.menu-wrap { position: relative; }
+.menu-chev { color: var(--accent); font-size: 10px; line-height: 1; margin-left: 2px; transition: transform 0.18s ease; }
+.menu-wrap.open .menu-chev { transform: rotate(180deg); }
+.dropdown-menu {
+  position: absolute; z-index: 30; top: calc(100% + 6px); left: 0;
+  min-width: 240px; margin: 0; padding: 6px;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; transform: translateY(-4px) scale(0.99); transform-origin: top left;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+}
+.menu-wrap.open .dropdown-menu { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+.dropdown-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  width: 100%; padding: 8px 10px; border: none; border-radius: 6px; background: none;
+  font-family: inherit; font-size: 12px; color: var(--text); text-align: left; cursor: pointer;
+  transition: background 0.1s;
+}
+.dropdown-item:hover, .dropdown-item:focus-visible { background: #232c3e; outline: none; }
+.dropdown-item small { color: var(--muted); font-size: 11px; }
+.dropdown-sep { height: 1px; margin: 6px 4px; background: var(--line); }
 .switch-text { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: normal; transition: color 0.15s; }
 .bg-side { max-width: 220px; margin-bottom: 12px; } /* Front/Back bg selector for the compile card */
 .switch:hover .switch-text { color: var(--text); }

@@ -2477,26 +2477,39 @@ async function delCard(id) {
 }
 
 
-// Download all
-el("btnDownloadAll").addEventListener("click", async () => {
+/* ---------------- Export menu ----------------
+   Every deck export lives in one dropdown (PNGs, PDF with/without bleed,
+   JSON export/import). Long-running exports report progress in the trigger
+   button's label, so the closed menu still shows "3/9…" while it works. */
+const btnExportMenu = el("btnExportMenu"), exportMenuLabel = el("exportMenuLabel");
+
+// Run an export action showing its progress in the menu button. `fn` gets a
+// setProgress(text) callback; the label and disabled state restore afterwards.
+async function withExportProgress(fn) {
+  const original = exportMenuLabel.textContent;
+  btnExportMenu.disabled = true;
+  try { await fn((txt) => { exportMenuLabel.textContent = txt; }); }
+  finally { exportMenuLabel.textContent = original; btnExportMenu.disabled = false; }
+}
+
+// Download all cards as PNGs
+async function downloadAllPngs() {
   if (deck.length === 0) { notify("The deck is empty."); return; }
-  const btn = el("btnDownloadAll");
-  btn.disabled = true;
-  const original = btn.textContent;
-  for (let i = 0; i < deck.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 350)); // pace between cards
-    btn.textContent = `${i + 1}/${deck.length}…`;
-    // Each card downloads all its faces (Protocol → front + back).
-    await downloadCardFaces(deck[i].state, String(i + 1).padStart(2, "0") + "_" + (deckShared.title || "card"));
-  }
-  btn.textContent = original;
-  btn.disabled = false;
-});
+  await withExportProgress(async (progress) => {
+    for (let i = 0; i < deck.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 350)); // pace between cards
+      progress(`${i + 1}/${deck.length}…`);
+      // Each card downloads all its faces (Protocol → front + back).
+      await downloadCardFaces(deck[i].state, String(i + 1).padStart(2, "0") + "_" + (deckShared.title || "card"));
+    }
+  });
+}
 
 /* ---------------- Print & play PDF (3×3, 63×88mm) ---------------- */
 // Print & play cut size and bleed. Each card gets a mirrored-edge bleed so a
 // slightly offset cut (or duplex misalignment) shows mirrored art instead of a
 // white sliver. 2mm keeps the 3×3 grid within A4 with room for the crop ticks.
+// The "Bleed" toggle next to the PDF button turns it off (edge-to-edge cards).
 const PDF_CARD_W = 63.5, PDF_CARD_H = 88.9, PDF_BLEED = 2;
 
 // Extend a rendered card canvas with a mirrored-edge bleed: the canvas is drawn
@@ -2523,23 +2536,24 @@ function withMirrorBleed(cnv, bpx) {
 // Bleed size in pixels for a poker-size canvas (proportional to the printed card).
 const bleedPx = (cnv) => Math.round(cnv.width * PDF_BLEED / PDF_CARD_W);
 
-async function renderToJpeg(st) {
+async function renderToJpeg(st, bleed) {
   const off = document.createElement("canvas");
   await renderCard(st, off, true, exportScale);
   const poker = toPoker(off, exportScale);
-  return withMirrorBleed(poker, bleedPx(poker)).toDataURL("image/jpeg", 0.92);
+  return (bleed ? withMirrorBleed(poker, bleedPx(poker)) : poker).toDataURL("image/jpeg", 0.92);
 }
 
-async function renderCompileVerticalJpeg(st, side) {
+async function renderCompileVerticalJpeg(st, side, bleed) {
   const off = document.createElement("canvas");
   await renderCompileVertical(st, side, off, true, exportScale);
   const poker = toPoker(off, exportScale);
-  return withMirrorBleed(poker, bleedPx(poker)).toDataURL("image/jpeg", 0.92);
+  return (bleed ? withMirrorBleed(poker, bleedPx(poker)) : poker).toDataURL("image/jpeg", 0.92);
 }
 
-let cardBackPng = null;
-async function getCardBackPng() {
-  if (cardBackPng) return cardBackPng;
+const cardBackPng = {}; // cached per bleed variant
+async function getCardBackPng(bleed) {
+  const key = bleed ? "bleed" : "plain";
+  if (cardBackPng[key]) return cardBackPng[key];
   const img = await loadImage("card-back/cardback.png");
   const off = document.createElement("canvas");
   off.width = CARD_W;
@@ -2548,45 +2562,45 @@ async function getCardBackPng() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, CARD_W, CARD_H);
   drawBackground(ctx, img, defaultTransform()); // cover-fit into the card aspect
-  cardBackPng = withMirrorBleed(off, bleedPx(off)).toDataURL("image/png"); // lossless: best quality for print & play
-  return cardBackPng;
+  cardBackPng[key] = (bleed ? withMirrorBleed(off, bleedPx(off)) : off).toDataURL("image/png"); // lossless: best quality for print & play
+  return cardBackPng[key];
 }
 
 // Crop ticks in the page margins, at the CUT lines (inset by the bleed within
 // each cell) — each column/row boundary is two cuts with the bleed gutter between.
+// With bleed off (B=0) adjacent cuts coincide; the Sets collapse the duplicates.
 function cropMarks(pdf, mx, my, W, H, B, cols, rows) {
   pdf.setDrawColor(150);
   pdf.setLineWidth(0.15);
   const t = 2.5, gap = 0.8;
   const cw = W + 2 * B, ch = H + 2 * B, gridW = cw * cols, gridH = ch * rows;
-  for (let c = 0; c < cols; c++) {
-    for (const x of [mx + c * cw + B, mx + c * cw + B + W]) {
-      pdf.line(x, my - gap - t, x, my - gap);
-      pdf.line(x, my + gridH + gap, x, my + gridH + gap + t);
-    }
+  const xs = new Set(), ys = new Set();
+  for (let c = 0; c < cols; c++) { xs.add(+(mx + c * cw + B).toFixed(3)); xs.add(+(mx + c * cw + B + W).toFixed(3)); }
+  for (let r = 0; r < rows; r++) { ys.add(+(my + r * ch + B).toFixed(3)); ys.add(+(my + r * ch + B + H).toFixed(3)); }
+  for (const x of xs) {
+    pdf.line(x, my - gap - t, x, my - gap);
+    pdf.line(x, my + gridH + gap, x, my + gridH + gap + t);
   }
-  for (let r = 0; r < rows; r++) {
-    for (const y of [my + r * ch + B, my + r * ch + B + H]) {
-      pdf.line(mx - gap - t, y, mx - gap, y);
-      pdf.line(mx + gridW + gap, y, mx + gridW + gap + t, y);
-    }
+  for (const y of ys) {
+    pdf.line(mx - gap - t, y, mx - gap, y);
+    pdf.line(mx + gridW + gap, y, mx + gridW + gap + t, y);
   }
 }
 
-el("btnExportPDF").addEventListener("click", async () => {
+// Print & play PDF; `bleed` picks between the mirrored-edge bleed layout and
+// edge-to-edge cards (both offered as separate entries in the Export menu).
+async function exportPdf(bleed) {
   if (deck.length === 0) { notify("The deck is empty."); return; }
   const jsPDFCtor = window.jspdf && window.jspdf.jsPDF;
   if (!jsPDFCtor) { notify("PDF library failed to load."); return; }
-  const btn = el("btnExportPDF");
-  const original = btn.textContent;
-  btn.disabled = true;
+  await withExportProgress(async (progress) => {
   try {
-    const W = PDF_CARD_W, H = PDF_CARD_H, B = PDF_BLEED, cols = 3, rows = 3, per = 9; // poker cut size (2.5×3.5"), 3×3 per A4 page
+    const W = PDF_CARD_W, H = PDF_CARD_H, B = bleed ? PDF_BLEED : 0, cols = 3, rows = 3, per = 9; // poker cut size (2.5×3.5"), 3×3 per A4 page
     const cw = W + 2 * B, ch = H + 2 * B; // cell footprint = cut size + bleed all around
     const pageW = 210, pageH = 297;
     const mx = (pageW - cw * cols) / 2, my = (pageH - ch * rows) / 2;
     const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
-    const back = await getCardBackPng();
+    const back = await getCardBackPng(bleed);
     // Value cards first (in mosaic order, so a split reads left-to-right), then the Protocol card.
     const ordered = [...valueCards(), ...deck.filter((c) => c.state.kind === "protocol")];
     const pages = Math.ceil(ordered.length / per);
@@ -2598,9 +2612,9 @@ el("btnExportPDF").addEventListener("click", async () => {
       firstPage = false;
       cropMarks(pdf, mx, my, W, H, B, cols, rows);
       for (let i = 0; i < chunk.length; i++) {
-        btn.textContent = `${p * per + i + 1}/${ordered.length}…`;
+        progress(`${p * per + i + 1}/${ordered.length}…`);
         const st = chunk[i].state;
-        const url = st.kind === "protocol" ? await renderCompileVerticalJpeg(st, "front") : await renderToJpeg(st);
+        const url = st.kind === "protocol" ? await renderCompileVerticalJpeg(st, "front", bleed) : await renderToJpeg(st, bleed);
         pdf.addImage(url, "JPEG", mx + (i % cols) * cw, my + Math.floor(i / cols) * ch, cw, ch);
       }
       // backs: one per front only (saves ink), mirrored horizontally so they line up
@@ -2613,7 +2627,7 @@ el("btnExportPDF").addEventListener("click", async () => {
         const col = cols - 1 - (i % cols); // mirror column for long-edge duplex flip
         const row = Math.floor(i / cols);
         if (st.kind === "protocol") {
-          const burl = await renderCompileVerticalJpeg(st, "back");
+          const burl = await renderCompileVerticalJpeg(st, "back", bleed);
           pdf.addImage(burl, "JPEG", mx + col * cw, my + row * ch, cw, ch);
         } else {
           pdf.addImage(back, "PNG", mx + col * cw, my + row * ch, cw, ch, "cardback");
@@ -2624,14 +2638,12 @@ el("btnExportPDF").addEventListener("click", async () => {
   } catch (e) {
     console.error(e);
     notify("Could not generate the PDF: " + e.message);
-  } finally {
-    btn.textContent = original;
-    btn.disabled = false;
   }
-});
+  });
+}
 
 // Export / import deck JSON
-el("btnExportDeck").addEventListener("click", () => {
+function exportDeckJson() {
   if (deck.length === 0) { notify("The deck is empty."); return; }
   // Lossless + deduplicated: original full-res images are kept verbatim (no
   // re-encode) but pooled once into `imgs`, so a 6-cell mosaic source isn't
@@ -2653,7 +2665,24 @@ el("btnExportDeck").addEventListener("click", () => {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
+}
+
+// Dropdown open/close + one wire per menu entry (the menu closes before acting).
+function toggleExportMenu(open) {
+  const wrap = el("exportWrap");
+  const o = open != null ? open : !wrap.classList.contains("open");
+  wrap.classList.toggle("open", o);
+  btnExportMenu.setAttribute("aria-expanded", String(o));
+}
+btnExportMenu.addEventListener("click", () => toggleExportMenu());
+document.addEventListener("click", (e) => { if (!el("exportWrap").contains(e.target)) toggleExportMenu(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleExportMenu(false); });
+const wireMenuItem = (id, action) => el(id).addEventListener("click", () => { toggleExportMenu(false); action(); });
+wireMenuItem("miDownloadAll", downloadAllPngs);
+wireMenuItem("miPdfBleed", () => exportPdf(true));
+wireMenuItem("miPdfPlain", () => exportPdf(false));
+wireMenuItem("miExportJson", exportDeckJson);
+wireMenuItem("miImportJson", () => el("inImportDeck").click());
 
 el("btnClearDeck").addEventListener("click", async () => {
   const ok = await showConfirm({
