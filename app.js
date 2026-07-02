@@ -2494,16 +2494,47 @@ el("btnDownloadAll").addEventListener("click", async () => {
 });
 
 /* ---------------- Print & play PDF (3×3, 63×88mm) ---------------- */
+// Print & play cut size and bleed. Each card gets a mirrored-edge bleed so a
+// slightly offset cut (or duplex misalignment) shows mirrored art instead of a
+// white sliver. 2mm keeps the 3×3 grid within A4 with room for the crop ticks.
+const PDF_CARD_W = 63.5, PDF_CARD_H = 88.9, PDF_BLEED = 2;
+
+// Extend a rendered card canvas with a mirrored-edge bleed: the canvas is drawn
+// flipped across each edge (and doubly flipped at the corners), so the bleed
+// continues the border art seamlessly. `bpx` = bleed in canvas pixels.
+function withMirrorBleed(cnv, bpx) {
+  const w = cnv.width, h = cnv.height;
+  const out = document.createElement("canvas");
+  out.width = w + 2 * bpx; out.height = h + 2 * bpx;
+  const x = out.getContext("2d");
+  x.drawImage(cnv, bpx, bpx);
+  const flips = [
+    [-1, 1, bpx, bpx],         [-1, 1, bpx + 2 * w, bpx],          // left, right
+    [1, -1, bpx, bpx],         [1, -1, bpx, bpx + 2 * h],          // top, bottom
+    [-1, -1, bpx, bpx],        [-1, -1, bpx + 2 * w, bpx],         // corners
+    [-1, -1, bpx, bpx + 2 * h], [-1, -1, bpx + 2 * w, bpx + 2 * h],
+  ];
+  for (const [sx, sy, tx, ty] of flips) {
+    x.save(); x.translate(tx, ty); x.scale(sx, sy); x.drawImage(cnv, 0, 0); x.restore();
+  }
+  return out;
+}
+
+// Bleed size in pixels for a poker-size canvas (proportional to the printed card).
+const bleedPx = (cnv) => Math.round(cnv.width * PDF_BLEED / PDF_CARD_W);
+
 async function renderToJpeg(st) {
   const off = document.createElement("canvas");
   await renderCard(st, off, true, exportScale);
-  return toPoker(off, exportScale).toDataURL("image/jpeg", 0.92);
+  const poker = toPoker(off, exportScale);
+  return withMirrorBleed(poker, bleedPx(poker)).toDataURL("image/jpeg", 0.92);
 }
 
 async function renderCompileVerticalJpeg(st, side) {
   const off = document.createElement("canvas");
   await renderCompileVertical(st, side, off, true, exportScale);
-  return toPoker(off, exportScale).toDataURL("image/jpeg", 0.92);
+  const poker = toPoker(off, exportScale);
+  return withMirrorBleed(poker, bleedPx(poker)).toDataURL("image/jpeg", 0.92);
 }
 
 let cardBackPng = null;
@@ -2517,24 +2548,28 @@ async function getCardBackPng() {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, CARD_W, CARD_H);
   drawBackground(ctx, img, defaultTransform()); // cover-fit into the card aspect
-  cardBackPng = off.toDataURL("image/png"); // lossless: best quality for print & play
+  cardBackPng = withMirrorBleed(off, bleedPx(off)).toDataURL("image/png"); // lossless: best quality for print & play
   return cardBackPng;
 }
 
-// Crop ticks in the page margins (don't mark the cards, which are edge-to-edge).
-function cropMarks(pdf, mx, my, W, H, cols, rows) {
+// Crop ticks in the page margins, at the CUT lines (inset by the bleed within
+// each cell) — each column/row boundary is two cuts with the bleed gutter between.
+function cropMarks(pdf, mx, my, W, H, B, cols, rows) {
   pdf.setDrawColor(150);
   pdf.setLineWidth(0.15);
-  const t = 3, gap = 1.5, gridW = W * cols, gridH = H * rows;
-  for (let c = 0; c <= cols; c++) {
-    const x = mx + c * W;
-    pdf.line(x, my - gap - t, x, my - gap);
-    pdf.line(x, my + gridH + gap, x, my + gridH + gap + t);
+  const t = 2.5, gap = 0.8;
+  const cw = W + 2 * B, ch = H + 2 * B, gridW = cw * cols, gridH = ch * rows;
+  for (let c = 0; c < cols; c++) {
+    for (const x of [mx + c * cw + B, mx + c * cw + B + W]) {
+      pdf.line(x, my - gap - t, x, my - gap);
+      pdf.line(x, my + gridH + gap, x, my + gridH + gap + t);
+    }
   }
-  for (let r = 0; r <= rows; r++) {
-    const y = my + r * H;
-    pdf.line(mx - gap - t, y, mx - gap, y);
-    pdf.line(mx + gridW + gap, y, mx + gridW + gap + t, y);
+  for (let r = 0; r < rows; r++) {
+    for (const y of [my + r * ch + B, my + r * ch + B + H]) {
+      pdf.line(mx - gap - t, y, mx - gap, y);
+      pdf.line(mx + gridW + gap, y, mx + gridW + gap + t, y);
+    }
   }
 }
 
@@ -2546,12 +2581,13 @@ el("btnExportPDF").addEventListener("click", async () => {
   const original = btn.textContent;
   btn.disabled = true;
   try {
-    const W = 63.5, H = 88.9, cols = 3, rows = 3, per = 9;   // standard poker card (2.5×3.5"), 3×3 per A4 page
+    const W = PDF_CARD_W, H = PDF_CARD_H, B = PDF_BLEED, cols = 3, rows = 3, per = 9; // poker cut size (2.5×3.5"), 3×3 per A4 page
+    const cw = W + 2 * B, ch = H + 2 * B; // cell footprint = cut size + bleed all around
     const pageW = 210, pageH = 297;
-    const mx = (pageW - W * cols) / 2, my = (pageH - H * rows) / 2;
+    const mx = (pageW - cw * cols) / 2, my = (pageH - ch * rows) / 2;
     const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
     const back = await getCardBackPng();
-    // Value cards first (they tile into the mosaic on the page), then the Protocol card.
+    // Value cards first (in mosaic order, so a split reads left-to-right), then the Protocol card.
     const ordered = [...valueCards(), ...deck.filter((c) => c.state.kind === "protocol")];
     const pages = Math.ceil(ordered.length / per);
     let firstPage = true;
@@ -2560,27 +2596,27 @@ el("btnExportPDF").addEventListener("click", async () => {
       // fronts
       if (!firstPage) pdf.addPage();
       firstPage = false;
-      cropMarks(pdf, mx, my, W, H, cols, rows);
+      cropMarks(pdf, mx, my, W, H, B, cols, rows);
       for (let i = 0; i < chunk.length; i++) {
         btn.textContent = `${p * per + i + 1}/${ordered.length}…`;
         const st = chunk[i].state;
         const url = st.kind === "protocol" ? await renderCompileVerticalJpeg(st, "front") : await renderToJpeg(st);
-        pdf.addImage(url, "JPEG", mx + (i % cols) * W, my + Math.floor(i / cols) * H, W, H);
+        pdf.addImage(url, "JPEG", mx + (i % cols) * cw, my + Math.floor(i / cols) * ch, cw, ch);
       }
       // backs: one per front only (saves ink), mirrored horizontally so they line up
       // with the fronts when printing double-sided with "flip on long edge".
       // Protocol cards share the generic card back; compile cards use their own back face.
       pdf.addPage();
-      cropMarks(pdf, mx, my, W, H, cols, rows);
+      cropMarks(pdf, mx, my, W, H, B, cols, rows);
       for (let i = 0; i < chunk.length; i++) {
         const st = chunk[i].state;
         const col = cols - 1 - (i % cols); // mirror column for long-edge duplex flip
         const row = Math.floor(i / cols);
         if (st.kind === "protocol") {
           const burl = await renderCompileVerticalJpeg(st, "back");
-          pdf.addImage(burl, "JPEG", mx + col * W, my + row * H, W, H);
+          pdf.addImage(burl, "JPEG", mx + col * cw, my + row * ch, cw, ch);
         } else {
-          pdf.addImage(back, "PNG", mx + col * W, my + row * H, W, H, "cardback");
+          pdf.addImage(back, "PNG", mx + col * cw, my + row * ch, cw, ch, "cardback");
         }
       }
     }
