@@ -2183,11 +2183,52 @@ async function buildShareJson(name) {
   return json;
 }
 
+// Compose the whole deck into ONE preview image, mirroring the share gallery's
+// layout: the Protocol card's faces on top, the value cards tiled 3-wide edge to
+// edge below (so a split background reassembles into the full picture). Copied to
+// the clipboard next to the share link — chat apps (Discord…) paste a single
+// clipboard flavour, so the image and the link travel as two pastes, one message.
+async function renderDeckPreview() {
+  const states = sortDeckStates(deck.map((d) => d.state));
+  const faces = [];   // [state, side] pairs for the landscape (Protocol) cards
+  const values = [];
+  for (const st of states) {
+    if (isLandscapeKind(st.kind)) for (const side of facesOf(st)) faces.push([st, side]);
+    else values.push(st);
+  }
+  const PAD = 24, GAP = 22, CW = 370;             // value-card cell width
+  const CH = Math.round(CW * CARD_H / CARD_W);
+  const W = CW * 3 + PAD * 2;                     // the 3-wide mosaic sets the width
+  const PW = Math.floor((W - PAD * 2 - GAP) / 2); // protocol faces sit two across
+  const PH = Math.round(PW * LAND_H / LAND_W);
+  const protoRows = Math.ceil(faces.length / 2);
+  const valueRows = Math.ceil(values.length / 3);
+  const protoBlock = protoRows ? protoRows * PH + (protoRows - 1) * GAP : 0;
+  const H = PAD * 2 + protoBlock + (protoRows && valueRows ? GAP : 0) + valueRows * CH;
+  const out = document.createElement("canvas");
+  out.width = W; out.height = H;
+  const ctx = out.getContext("2d");
+  ctx.fillStyle = "#0c0e14"; // theme --bg
+  ctx.fillRect(0, 0, W, H);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  const cell = document.createElement("canvas");
+  for (let i = 0; i < faces.length; i++) {
+    await renderKind(faces[i][0], cell, { side: faces[i][1], hq: true });
+    ctx.drawImage(cell, PAD + (i % 2) * (PW + GAP), PAD + Math.floor(i / 2) * (PH + GAP), PW, PH);
+  }
+  const vy = PAD + protoBlock + (protoRows ? GAP : 0);
+  for (let i = 0; i < values.length; i++) {
+    await renderKind(values[i], cell, { hq: true });
+    ctx.drawImage(cell, PAD + (i % 3) * CW, vy + Math.floor(i / 3) * CH, CW, CH);
+  }
+  return out;
+}
+
 el("btnExport").addEventListener("click", async () => {
   if (!deck.length) { notify("The deck is empty."); return; }
   const btn = el("btnExport");
   const orig = btn.textContent; btn.disabled = true; btn.textContent = "…";
-  let url, viaService = false;
+  let url, viaService = false, prevBlob = null, prevUrl = "";
   try {
     const json = await buildShareJson(el("inDeckName").value.trim() || "Shared deck");
     // Short link: store the deck in a free service so the URL fits anywhere.
@@ -2204,16 +2245,53 @@ el("btnExport").addEventListener("click", async () => {
       try { encoded = bytesToB64url(await gzipStr(json)); } catch (e2) { encoded = bytesToB64url(new TextEncoder().encode(json)); }
       url = `${location.origin}${location.pathname}#deck=${encoded}`;
     }
+    // Deck preview image (best-effort — the link still shares fine without it).
+    try {
+      const cnv = await renderDeckPreview();
+      prevBlob = await new Promise((r) => cnv.toBlob(r, "image/png"));
+      if (prevBlob) prevUrl = URL.createObjectURL(prevBlob);
+    } catch (e) { console.warn("deck preview", e); }
   } finally { btn.disabled = false; btn.textContent = orig; }
   // Short, prominent note (accent colour) — shared images are compressed, so point
   // users at the lossless Export/Import file when they need full quality.
   const headsUp = '<strong style="color:var(--accent)">Heads up:</strong> shared images are compressed. For full quality (e.g. printing), use <strong>Export / Import</strong> instead.';
-  const ok = await showModal({
+  const canCopyImg = prevBlob && navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== "undefined";
+  const previewHtml = prevUrl ? `
+    <span class="share-preview">
+      <img src="${prevUrl}" alt="Deck preview">
+      <span class="share-preview-actions">
+        ${canCopyImg ? '<button id="btnCopyPreview" class="btn btn-ghost" type="button">Copy preview image</button>' : ""}
+        <button id="btnSharePreview" class="btn btn-ghost" type="button" hidden>Share…</button>
+      </span>
+      <small>Paste the image in your chat, then paste the link — cards + link in one message.</small>
+    </span>` : "";
+  const done = showModal({
     title: "Share deck",
-    bodyHtml: viaService ? headsUp
-      : '<span style="color:var(--danger)">Link service unavailable — this is a long, self-contained link.</span><br><br>' + headsUp,
+    bodyHtml: (viaService ? headsUp
+      : '<span style="color:var(--danger)">Link service unavailable — this is a long, self-contained link.</span><br><br>' + headsUp) + previewHtml,
     input: true, value: url, readonly: true, confirmLabel: "Copy link", cancelLabel: "Close", danger: false,
   });
+  if (canCopyImg) {
+    const cp = el("btnCopyPreview");
+    cp.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": prevBlob })]);
+        cp.textContent = "Copied ✓";
+      } catch (e) { console.warn("copy preview", e); cp.textContent = "Copy failed"; }
+      setTimeout(() => { cp.textContent = "Copy preview image"; }, 1600);
+    });
+  }
+  if (prevBlob && navigator.canShare) {
+    // Mobile: the system share sheet can carry the image AND the link in one go.
+    const file = new File([prevBlob], "deck-preview.png", { type: "image/png" });
+    if (navigator.canShare({ files: [file] })) {
+      const sp = el("btnSharePreview");
+      sp.hidden = false;
+      sp.addEventListener("click", () => navigator.share({ files: [file], text: url }).catch(() => {}));
+    }
+  }
+  const ok = await done;
+  if (prevUrl) URL.revokeObjectURL(prevUrl);
   if (ok) { try { await navigator.clipboard.writeText(url); } catch (e) {} }
 });
 

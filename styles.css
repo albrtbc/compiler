@@ -792,6 +792,20 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 .modal-input:focus { outline: none; border-color: var(--accent-2); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
+/* Share modal: deck preview image, copyable next to the link */
+.modal:has(.share-preview) { max-width: 520px; }
+.share-preview { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.share-preview img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.share-preview-actions { display: flex; gap: 8px; }
+.share-preview small { color: var(--muted); font-size: 12px; }
+
 /* ===== Mosaic splitter modal ===== */
 .mosaic-modal {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
