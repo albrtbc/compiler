@@ -248,6 +248,26 @@ async function loadBg(st) {
   return null;
 }
 
+// Render ONLY a card's background — no frame, panels, text or logo. Asset export:
+// landscape kinds come out 1039×744 (front glitch optional), value cards 744×1039
+// (in split mode each card's transform reproduces its crop of the mosaic source).
+// Returns false when the card has no background image to export.
+async function renderBgOnly(st, cnv, { glitch = false, scale = 1 } = {}) {
+  st = mergeShared(st);
+  const land = isLandscapeKind(st.kind);
+  const W = land ? LAND_W : CARD_W, H = land ? LAND_H : CARD_H;
+  const bgImg = await loadBg(st);
+  if (!bgImg) return false;
+  cnv.width = Math.round(W * scale); cnv.height = Math.round(H * scale);
+  const ctx = cnv.getContext("2d");
+  ctx.setTransform(scale, 0, 0, scale, 0, 0); // draw in design space; supersample for hi-res export
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  drawBackground(ctx, bgImg, st.bg.transform, W, H, true);
+  const gp = glitchPresetOf(st);
+  if (glitch && gp > 0) applyFrontGlitch(ctx, W, H, glitchSeed(st) + "|front", GLITCH_PRESETS[gp - 1]); // same seed as the card front
+  return true;
+}
+
 // Render the compile card in landscape (1039×744) — this is what the editor shows.
 async function renderCompileLandscape(st, side, cnv, hq = false, scale = 1) {
   const perCard = st._shared ? st._shared.perCardBg : deckShared.perCardBg;
@@ -2505,6 +2525,44 @@ async function downloadAllPngs() {
   });
 }
 
+// Download the raw backgrounds (no frame/text/logo) as PNGs: the Protocol front
+// bg clean and — when a glitch preset is on — glitched, plus each value card's
+// bg (in split mode that's the 6 mosaic crops). Value cards sharing the exact
+// same bg + transform dedupe to a single file. Rendered at 2× for asset reuse.
+async function downloadBackgrounds() {
+  if (deck.length === 0) { notify("The deck is empty."); return; }
+  const base = safeName(deckShared.title || "card");
+  const jobs = [];
+  const protos = deck.filter((c) => isLandscapeKind(c.state.kind));
+  protos.forEach((c, i) => {
+    const n = protos.length > 1 ? "_" + (i + 1) : "";
+    jobs.push({ st: c.state, glitch: false, name: `${base}_bg_protocol${n}_clean.png` });
+    if (glitchPresetOf(c.state) > 0) jobs.push({ st: c.state, glitch: true, name: `${base}_bg_protocol${n}_glitch.png` });
+  });
+  const uniq = [];
+  for (const c of valueCards()) {
+    const key = JSON.stringify(mergeShared(c.state).bg);
+    if (!uniq.some((u) => u.key === key)) uniq.push({ key, st: c.state });
+  }
+  uniq.forEach((u, i) => jobs.push({
+    st: u.st, glitch: false,
+    name: uniq.length === 1 ? `${base}_bg_compile.png` : `${String(i + 1).padStart(2, "0")}_${base}_bg.png`,
+  }));
+  let done = 0;
+  await withExportProgress(async (progress) => {
+    for (let i = 0; i < jobs.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 350)); // pace between downloads
+      progress(`${i + 1}/${jobs.length}…`);
+      const cnv = document.createElement("canvas");
+      if (await renderBgOnly(jobs[i].st, cnv, { glitch: jobs[i].glitch, scale: 2 })) {
+        downloadCanvas(cnv, jobs[i].name);
+        done++;
+      }
+    }
+  });
+  if (!done) notify("No backgrounds to export — the cards have no background image.");
+}
+
 /* ---------------- Print & play PDF (3×3, 63×88mm) ---------------- */
 // Print & play cut size and bleed. Each card gets a mirrored-edge bleed so a
 // slightly offset cut (or duplex misalignment) shows mirrored art instead of a
@@ -2679,6 +2737,7 @@ document.addEventListener("click", (e) => { if (!el("exportWrap").contains(e.tar
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleExportMenu(false); });
 const wireMenuItem = (id, action) => el(id).addEventListener("click", () => { toggleExportMenu(false); action(); });
 wireMenuItem("miDownloadAll", downloadAllPngs);
+wireMenuItem("miDownloadBgs", downloadBackgrounds);
 wireMenuItem("miPdfBleed", () => exportPdf(true));
 wireMenuItem("miPdfPlain", () => exportPdf(false));
 wireMenuItem("miExportJson", exportDeckJson);
