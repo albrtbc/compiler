@@ -303,9 +303,11 @@ async function renderCompileVertical(st, side, cnv, hq = false, scale = 1) {
   cnv.width = Math.round(CARD_W * scale); cnv.height = Math.round(CARD_H * scale);
   const x = cnv.getContext("2d");
   x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
-  // rotate the landscape master 90° clockwise to fit the portrait card
-  x.translate(CARD_W * scale, 0);
-  x.rotate(Math.PI / 2);
+  // The two faces rotate in OPPOSITE directions (front 90° CCW — top to the
+  // left; back 90° CW — top to the right): after the long-edge duplex flip both
+  // faces of the physical card read upright. Same direction = back upside down.
+  if (side === "back") { x.translate(CARD_W * scale, 0); x.rotate(Math.PI / 2); }
+  else { x.translate(0, CARD_H * scale); x.rotate(-Math.PI / 2); }
   x.drawImage(land, 0, 0);
 }
 
