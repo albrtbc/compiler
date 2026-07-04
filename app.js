@@ -323,9 +323,11 @@ async function renderCompileVertical(st, side, cnv, hq = false, scale = 1) {
   cnv.width = Math.round(CARD_W * scale); cnv.height = Math.round(CARD_H * scale);
   const x = cnv.getContext("2d");
   x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
-  // rotate the landscape master 90° clockwise to fit the portrait card
-  x.translate(CARD_W * scale, 0);
-  x.rotate(Math.PI / 2);
+  // The two faces rotate in OPPOSITE directions (front 90° CCW — top to the
+  // left; back 90° CW — top to the right): after the long-edge duplex flip both
+  // faces of the physical card read upright. Same direction = back upside down.
+  if (side === "back") { x.translate(CARD_W * scale, 0); x.rotate(Math.PI / 2); }
+  else { x.translate(0, CARD_H * scale); x.rotate(-Math.PI / 2); }
   x.drawImage(land, 0, 0);
 }
 
@@ -2570,6 +2572,29 @@ async function downloadBackgrounds() {
 // The "Bleed" toggle next to the PDF button turns it off (edge-to-edge cards).
 const PDF_CARD_W = 63.5, PDF_CARD_H = 88.9, PDF_BLEED = 2;
 
+// Print & play page formats. The card cut size is fixed (poker 63.5×88.9mm); the
+// grid is fitted to each sheet. A4 fits 3×3; US Letter is shorter, so with bleed
+// it fits 3×2 (6 cards/page) and edge-to-edge 3×3. `fmt` is the jsPDF page name.
+const PDF_PAGES = {
+  a4:     { w: 210,   h: 297,   label: "A4",        fmt: "a4" },
+  letter: { w: 215.9, h: 279.4, label: "US Letter", fmt: "letter" },
+};
+
+// Grid geometry for a paper format + bleed choice. The cut size is fixed (poker
+// 63.5×88.9mm); we fit as many whole cells as the sheet allows, keeping a small
+// outer margin for the crop ticks. A4 → 3×3; US Letter (shorter) → 3×2 with bleed,
+// 3×3 edge-to-edge. Shared by the PDF exporter and the export-dialog preview.
+function pdfLayout(bleed, page) {
+  const pg = PDF_PAGES[page] || PDF_PAGES.a4;
+  const W = PDF_CARD_W, H = PDF_CARD_H, B = bleed ? PDF_BLEED : 0; // poker cut size (2.5×3.5")
+  const cw = W + 2 * B, ch = H + 2 * B; // cell footprint = cut size + bleed all around
+  const MARGIN = 3.5;
+  const cols = Math.max(1, Math.floor((pg.w - 2 * MARGIN) / cw));
+  const rows = Math.max(1, Math.floor((pg.h - 2 * MARGIN) / ch));
+  const mx = (pg.w - cw * cols) / 2, my = (pg.h - ch * rows) / 2;
+  return { pg, W, H, B, cw, ch, cols, rows, per: cols * rows, mx, my, pageW: pg.w, pageH: pg.h };
+}
+
 // Extend a rendered card canvas with a mirrored-edge bleed: the canvas is drawn
 // flipped across each edge (and doubly flipped at the corners), so the bleed
 // continues the border art seamlessly. `bpx` = bleed in canvas pixels.
@@ -2646,21 +2671,19 @@ function cropMarks(pdf, mx, my, W, H, B, cols, rows) {
 }
 
 // Print & play PDF; `bleed` picks between the mirrored-edge bleed layout and
-// edge-to-edge cards (both offered as separate entries in the Export menu).
-async function exportPdf(bleed) {
+// edge-to-edge cards; `page` picks the paper format ("a4" | "letter"). Each
+// combination is offered as a separate entry in the Export menu.
+async function exportPdf(bleed, page = "a4") {
   if (deck.length === 0) { notify("The deck is empty."); return; }
   const jsPDFCtor = window.jspdf && window.jspdf.jsPDF;
   if (!jsPDFCtor) { notify("PDF library failed to load."); return; }
   await withExportProgress(async (progress) => {
   try {
-    const W = PDF_CARD_W, H = PDF_CARD_H, B = bleed ? PDF_BLEED : 0, cols = 3, rows = 3, per = 9; // poker cut size (2.5×3.5"), 3×3 per A4 page
-    const cw = W + 2 * B, ch = H + 2 * B; // cell footprint = cut size + bleed all around
-    const pageW = 210, pageH = 297;
-    const mx = (pageW - cw * cols) / 2, my = (pageH - ch * rows) / 2;
-    const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+    const { pg, W, H, B, cw, ch, cols, rows, per, mx, my } = pdfLayout(bleed, page);
+    const pdf = new jsPDFCtor({ orientation: "portrait", unit: "mm", format: pg.fmt, compress: true });
     const back = await getCardBackPng(bleed);
     // Value cards first (in mosaic order, so a split reads left-to-right), then the Protocol card.
-    const ordered = [...valueCards(), ...deck.filter((c) => c.state.kind === "protocol")];
+    const ordered = pdfOrderedCards();
     const pages = Math.ceil(ordered.length / per);
     let firstPage = true;
     for (let p = 0; p < pages; p++) {
@@ -2692,12 +2715,116 @@ async function exportPdf(bleed) {
         }
       }
     }
-    pdf.save("compiler-deck.pdf");
+    pdf.save(`compiler-deck-${page}${bleed ? "-bleed" : ""}.pdf`);
   } catch (e) {
     console.error(e);
     notify("Could not generate the PDF: " + e.message);
   }
   });
+}
+
+// Cards included in the PDF, in page order: value cards (low→high, so a mosaic
+// split reads left-to-right) then the landscape Protocol card. Shared by the
+// exporter and the export-dialog preview.
+function pdfOrderedCards() {
+  return [...valueCards(), ...deck.filter((c) => c.state && c.state.kind === "protocol")];
+}
+
+/* ---- Export-PDF dialog: live preview + paper / bleed options ---- */
+const pdfOpts = { page: "a4", bleed: true };
+let pdfPageIdx = 0;      // index into the flat sheet list (front then back, per page)
+let pdfRenderSeq = 0;    // guards against out-of-order async renders while paging
+const PDF_CARDBACK_URL = "card-back/cardback.png"; // generic back shared by all value cards
+const pdfFaceCache = new Map();                    // protocol vertical faces, keyed `${id}:${side}`
+
+function openPdfModal() {
+  if (deck.length === 0) { notify("The deck is empty."); return; }
+  pdfPageIdx = 0;
+  pdfFaceCache.clear(); // re-render protocol faces fresh (the deck may have changed)
+  el("pdfOverlay").hidden = false;
+  renderPdfPreview();
+}
+function closePdfModal() { el("pdfOverlay").hidden = true; }
+
+// Flip the preview to another sheet (clamped inside renderPdfPreview).
+function pdfGotoPage(delta) { pdfPageIdx += delta; renderPdfPreview(); }
+
+// Downscaled thumbnail of the Protocol card's vertical (rotated-to-portrait) face —
+// how it actually prints. Cached per card+side for the life of the dialog.
+async function pdfVerticalThumb(card, side) {
+  const key = `${card.id}:${side}`;
+  if (pdfFaceCache.has(key)) return pdfFaceCache.get(key);
+  const off = document.createElement("canvas");
+  await renderCompileVertical(card.state, side, off, false, 1);
+  const tw = 240, t = document.createElement("canvas");
+  t.width = tw; t.height = Math.round(tw * off.height / off.width);
+  t.getContext("2d").drawImage(off, 0, 0, t.width, t.height);
+  const url = t.toDataURL("image/jpeg", 0.8);
+  pdfFaceCache.set(key, url);
+  return url;
+}
+
+// Image for one card face: Protocol renders vertically (both faces); value cards use
+// their cached front thumb and share the generic card back.
+async function pdfFaceImg(card, side) {
+  if (card.state.kind === "protocol") return pdfVerticalThumb(card, side);
+  return side === "front" ? (card.thumb || "") : PDF_CARDBACK_URL;
+}
+
+// Draw one sheet to scale. The preview walks the PDF's sheet order: each page is a
+// fronts sheet then a mirror-flipped backs sheet (as it prints double-sided). Cards
+// sit at the exact fractional position/size the PDF uses, with a dashed rectangle
+// marking the cut line (inset by the bleed).
+async function renderPdfPreview() {
+  const seq = ++pdfRenderSeq;
+  const L = pdfLayout(pdfOpts.bleed, pdfOpts.page);
+  const cards = pdfOrderedCards();
+  const pages = Math.max(1, Math.ceil(cards.length / L.per));
+  const sheets = pages * 2; // a fronts sheet + a backs sheet per page
+  pdfPageIdx = Math.min(Math.max(pdfPageIdx, 0), sheets - 1);
+  const chunkIdx = Math.floor(pdfPageIdx / 2);
+  const side = pdfPageIdx % 2 === 0 ? "front" : "back";
+  const chunk = cards.slice(chunkIdx * L.per, chunkIdx * L.per + L.per);
+
+  // Resolve each cell's image + grid slot. Backs mirror the columns so they line up
+  // with the fronts under a long-edge duplex flip (matches exportPdf).
+  const imgs = await Promise.all(chunk.map((c) => pdfFaceImg(c, side)));
+  if (seq !== pdfRenderSeq) return; // a newer render superseded this one
+  const cells = new Array(L.per).fill(null);
+  for (let i = 0; i < chunk.length; i++) {
+    const col = side === "back" ? L.cols - 1 - (i % L.cols) : i % L.cols;
+    cells[Math.floor(i / L.cols) * L.cols + col] = imgs[i];
+  }
+
+  const pct = (v, total) => (v / total * 100).toFixed(3) + "%";
+  const cut = L.B > 0
+    ? `top:${pct(L.B, L.ch)};right:${pct(L.B, L.cw)};bottom:${pct(L.B, L.ch)};left:${pct(L.B, L.cw)};`
+    : "inset:0;";
+  let html = "";
+  for (let i = 0; i < L.per; i++) {
+    const left = pct(L.mx + (i % L.cols) * L.cw, L.pageW);
+    const top = pct(L.my + Math.floor(i / L.cols) * L.ch, L.pageH);
+    const w = pct(L.cw, L.pageW), h = pct(L.ch, L.pageH);
+    const img = cells[i];
+    const bg = img ? `background-image:url('${img}');` : "";
+    html += `<div class="pdf-cell${img ? "" : " empty"}" style="left:${left};top:${top};width:${w};height:${h};${bg}">` +
+            `<div class="pdf-cut" style="${cut}"></div></div>`;
+  }
+  const sheet = el("pdfSheet");
+  sheet.style.aspectRatio = `${L.pageW} / ${L.pageH}`;
+  sheet.innerHTML = html;
+
+  el("pdfSummary").innerHTML =
+    `<b>${L.pg.label}</b> · ${L.cols}×${L.rows} = <b>${L.per}</b> cards/page · ` +
+    `${cards.length} card${cards.length === 1 ? "" : "s"} → <b>${sheets}</b> pages (fronts + backs)` +
+    (L.B ? ` · +${PDF_BLEED} mm mirrored bleed` : "");
+  el("pdfPaperName").textContent = L.pg.label;
+  el("pdfNav").hidden = sheets <= 1;
+  el("pdfPageLabel").textContent = `Page ${pdfPageIdx + 1} / ${sheets}`;
+  el("pdfPrev").disabled = pdfPageIdx === 0;
+  el("pdfNext").disabled = pdfPageIdx >= sheets - 1;
+  for (const b of el("pdfPaperSeg").querySelectorAll(".seg-btn")) b.classList.toggle("active", b.dataset.page === pdfOpts.page);
+  for (const b of el("pdfBleedSeg").querySelectorAll(".seg-btn")) b.classList.toggle("active", (b.dataset.bleed === "1") === pdfOpts.bleed);
 }
 
 // Export / import deck JSON
@@ -2738,10 +2865,25 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleExpo
 const wireMenuItem = (id, action) => el(id).addEventListener("click", () => { toggleExportMenu(false); action(); });
 wireMenuItem("miDownloadAll", downloadAllPngs);
 wireMenuItem("miDownloadBgs", downloadBackgrounds);
-wireMenuItem("miPdfBleed", () => exportPdf(true));
-wireMenuItem("miPdfPlain", () => exportPdf(false));
+wireMenuItem("miPdf", openPdfModal);
 wireMenuItem("miExportJson", exportDeckJson);
 wireMenuItem("miImportJson", () => el("inImportDeck").click());
+
+// Export-PDF dialog: option toggles update the preview live; download uses the choices.
+el("pdfCancel").addEventListener("click", closePdfModal);
+el("pdfOverlay").addEventListener("click", (e) => { if (e.target === el("pdfOverlay")) closePdfModal(); });
+document.addEventListener("keydown", (e) => {
+  if (el("pdfOverlay").hidden) return;
+  if (e.key === "Escape") closePdfModal();
+  else if (e.key === "ArrowLeft") pdfGotoPage(-1);
+  else if (e.key === "ArrowRight") pdfGotoPage(1);
+});
+// Changing paper/bleed changes how many cards fit, so restart the preview at page 1.
+el("pdfPaperSeg").addEventListener("click", (e) => { const b = e.target.closest(".seg-btn"); if (!b) return; pdfOpts.page = b.dataset.page; pdfPageIdx = 0; renderPdfPreview(); });
+el("pdfBleedSeg").addEventListener("click", (e) => { const b = e.target.closest(".seg-btn"); if (!b) return; pdfOpts.bleed = b.dataset.bleed === "1"; pdfPageIdx = 0; renderPdfPreview(); });
+el("pdfPrev").addEventListener("click", () => pdfGotoPage(-1));
+el("pdfNext").addEventListener("click", () => pdfGotoPage(1));
+el("pdfDownload").addEventListener("click", () => { const { page, bleed } = pdfOpts; closePdfModal(); exportPdf(bleed, page); });
 
 el("btnClearDeck").addEventListener("click", async () => {
   const ok = await showConfirm({

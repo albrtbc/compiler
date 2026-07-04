@@ -327,6 +327,8 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 .dropdown-item:hover, .dropdown-item:focus-visible { background: #232c3e; outline: none; }
 .dropdown-item small { color: var(--muted); font-size: 11px; }
 .dropdown-sep { height: 1px; margin: 6px 4px; background: var(--line); }
+.dropdown-note { padding: 4px 10px 6px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+.dropdown-note b { color: var(--text); font-weight: 600; }
 .switch-text { color: var(--muted); font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: normal; transition: color 0.15s; }
 .bg-side { max-width: 220px; margin-bottom: 12px; } /* Front/Back bg selector for the compile card */
 .switch:hover .switch-text { color: var(--text); }
@@ -866,6 +868,51 @@ label.switch { display: inline-flex; align-items: center; gap: 10px; margin: 4px
 .mosaic-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
 .mosaic-btn { width: 100%; margin-top: 10px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ===== Print & play PDF export modal ===== */
+.pdf-modal {
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  width: min(92vw, 560px);
+}
+.pdf-modal h3 { margin: 0 0 6px; font-size: 16px; letter-spacing: 0.5px; }
+.pdf-preview {
+  display: flex; align-items: center; justify-content: center;
+  height: min(46vh, 420px);
+  margin: 12px 0 4px;
+  padding: 16px;
+  background:
+    repeating-conic-gradient(#171d29 0% 25%, #1c2331 0% 50%) 50% / 22px 22px; /* subtle checkerboard behind the sheet */
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.pdf-sheet {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  background: #fff;
+  box-shadow: 0 3px 16px rgba(0, 0, 0, 0.55);
+  /* aspect-ratio is set inline from the chosen paper size */
+}
+.pdf-cell { position: absolute; overflow: hidden; background: #e9edf2 center / cover no-repeat; }
+.pdf-cell.empty { background: repeating-linear-gradient(45deg, #eef1f5 0 6px, #e4e8ee 6px 12px); }
+.pdf-cut { position: absolute; outline: 1px dashed rgba(10, 20, 40, 0.45); pointer-events: none; }
+.pdf-nav { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 8px 0 2px; }
+.pdf-nav .btn { padding: 2px 12px; font-size: 18px; line-height: 1; }
+.pdf-page-label { color: var(--muted); font-size: 12px; letter-spacing: 0.5px; min-width: 92px; text-align: center; }
+.pdf-options { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 2px; }
+.pdf-opt { flex: 1 1 200px; min-width: 180px; }
+.pdf-opt-label {
+  display: block; margin-bottom: 6px;
+  color: var(--muted); font-size: 11px; font-weight: 700;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+.pdf-opt .seg { margin-bottom: 0; }
+.pdf-summary { margin: 4px 0 10px; color: var(--text); font-size: 13px; }
+.pdf-summary b { color: var(--accent); }
 
 /* ===== Saved decks library ===== */
 .deck-name-row { display: flex; gap: 8px; margin-bottom: 10px; }

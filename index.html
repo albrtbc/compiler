@@ -175,8 +175,7 @@
             <div id="exportMenu" class="dropdown-menu" role="menu">
               <button id="miDownloadAll" class="dropdown-item" type="button" role="menuitem">Download PNGs<small>every card, Protocol front &amp; back</small></button>
               <button id="miDownloadBgs" class="dropdown-item" type="button" role="menuitem">Download backgrounds<small>bg only, no frame/text — Protocol front ±glitch + split crops</small></button>
-              <button id="miPdfBleed" class="dropdown-item" type="button" role="menuitem">Print &amp; play PDF<small>2mm mirrored bleed, safer cutting</small></button>
-              <button id="miPdfPlain" class="dropdown-item" type="button" role="menuitem">PDF without bleed<small>edge-to-edge, seamless mosaic</small></button>
+              <button id="miPdf" class="dropdown-item" type="button" role="menuitem">Export PDF<small>print &amp; play, choose paper &amp; bleed</small></button>
               <div class="dropdown-sep" role="separator"></div>
               <button id="miExportJson" class="dropdown-item" type="button" role="menuitem">Export deck<small>lossless .json, full quality</small></button>
               <button id="miImportJson" class="dropdown-item" type="button" role="menuitem">Import deck<small>load a .json file</small></button>
@@ -243,6 +242,44 @@
       <div class="modal-actions">
         <button id="mosaicCancel" class="btn btn-ghost" type="button">Cancel</button>
         <button id="mosaicAccept" class="btn btn-primary" type="button" disabled>Apply to 6 cards</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Print & play PDF export: preview + paper / bleed options -->
+  <div id="pdfOverlay" class="modal-overlay" hidden>
+    <div class="pdf-modal" role="dialog" aria-modal="true" aria-labelledby="pdfTitle">
+      <h3 id="pdfTitle">Export print &amp; play PDF</h3>
+      <p class="hint">Preview of the first page. Cards are laid out at their true cut size (63.5 × 88.9 mm).</p>
+      <div class="pdf-preview">
+        <div id="pdfSheet" class="pdf-sheet"></div>
+      </div>
+      <div id="pdfNav" class="pdf-nav" hidden>
+        <button id="pdfPrev" class="btn btn-sm btn-ghost" type="button" aria-label="Previous page">‹</button>
+        <span id="pdfPageLabel" class="pdf-page-label">Page 1 / 1</span>
+        <button id="pdfNext" class="btn btn-sm btn-ghost" type="button" aria-label="Next page">›</button>
+      </div>
+      <div class="pdf-options">
+        <div class="pdf-opt">
+          <span class="pdf-opt-label">Paper size</span>
+          <div class="seg" id="pdfPaperSeg" role="group" aria-label="Paper size">
+            <button class="seg-btn active" type="button" data-page="a4">A4</button>
+            <button class="seg-btn" type="button" data-page="letter">US Letter</button>
+          </div>
+        </div>
+        <div class="pdf-opt">
+          <span class="pdf-opt-label">Bleed</span>
+          <div class="seg" id="pdfBleedSeg" role="group" aria-label="Bleed">
+            <button class="seg-btn active" type="button" data-bleed="1">2 mm bleed</button>
+            <button class="seg-btn" type="button" data-bleed="0">Edge-to-edge</button>
+          </div>
+        </div>
+      </div>
+      <p id="pdfSummary" class="pdf-summary"></p>
+      <p class="hint">Print at <b>100% / Actual size</b> on <b id="pdfPaperName">A4</b> paper — turn off “Fit to page”, or cards come out too small.</p>
+      <div class="modal-actions">
+        <button id="pdfCancel" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="pdfDownload" class="btn btn-primary" type="button">↧ Download PDF</button>
       </div>
     </div>
   </div>
