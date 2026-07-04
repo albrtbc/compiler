@@ -1393,6 +1393,7 @@ function saveCustomBgs() {
 let mosaicT = { s: 1, tx: 0, ty: 0 }; // image transform within the stage
 let mosaicFit = 1;                    // the "cover the frame" scale (slider = 100%)
 let mosaicSrc = "";                   // dataUrl of the loaded image
+let mosaicIsPreset = false;           // true when that image is a default/preset (already in the picker — don't re-add it as a custom bg)
 
 // The 6 value cards (kind "protocol"), in value order.
 function valueCards() {
@@ -1440,8 +1441,9 @@ function viewMosaicRegion(region) {
   el("mosaicZoom").value = Math.round(Math.max(10, Math.min(400, mosaicT.s / mosaicFit * 100)));
   applyMosaicTransform();
 }
-function loadMosaicImage(dataUrl, region) {
+function loadMosaicImage(dataUrl, region, isPreset = false) {
   mosaicSrc = dataUrl;
+  mosaicIsPreset = !!isPreset;
   const img = el("mosaicImg");
   img.onload = () => {
     img.style.width = img.naturalWidth + "px";
@@ -1462,7 +1464,7 @@ async function presetDataUrl(name) {
   } catch (e) { return null; }
 }
 function mosaicEmptyState() {
-  mosaicSrc = ""; el("mosaicImg").hidden = true; el("mosaicFrame").hidden = true; el("mosaicEmpty").hidden = false;
+  mosaicSrc = ""; mosaicIsPreset = false; el("mosaicImg").hidden = true; el("mosaicFrame").hidden = true; el("mosaicEmpty").hidden = false;
   el("mosaicZoom").disabled = true; el("mosaicReset").disabled = true; el("mosaicAccept").disabled = true;
 }
 function openMosaic(opts) {
@@ -1475,11 +1477,11 @@ function openMosaic(opts) {
   // different image (this is why an existing deck's old split used to keep showing):
   if (bg.type === "preset" && bg.name) {                                                // split a selected default/preset image
     mosaicEmptyState();
-    presetDataUrl(bg.name).then((u) => { if (u && !el("mosaicOverlay").hidden) loadMosaicImage(u); });
+    presetDataUrl(bg.name).then((u) => { if (u && !el("mosaicOverlay").hidden) loadMosaicImage(u, null, true); });
     return;
   }
   if (bg.type === "custom" && bg.dataUrl && bg.dataUrl !== splitSrc) { loadMosaicImage(bg.dataUrl); return; } // split a different custom bg
-  if (splitSrc) { loadMosaicImage(splitSrc, deckShared.split); return; }                // else edit the saved split
+  if (splitSrc) { loadMosaicImage(splitSrc, deckShared.split, !!deckShared.split.fromPreset); return; }       // else edit the saved split (keep its preset origin)
   if (bg.type === "custom" && bg.dataUrl) { loadMosaicImage(bg.dataUrl); return; }      // current bg is the split source → split it
   mosaicEmptyState();                                                                   // nothing to split yet — upload inside the modal
 }
@@ -1514,7 +1516,8 @@ function applyMosaic() {
   const gw = f.w / mosaicT.s, gh = f.h / mosaicT.s;
   deckShared.perCardBg = true;
   // Save the split as a TEMPLATE (incl. the source size) instead of creating 6 cards.
-  deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh, iw, ih };
+  // `fromPreset` remembers the source was a default image, so it's never re-added to the custom picker.
+  deckShared.split = { dataUrl: mosaicSrc, ix0, iy0, w: gw, h: gh, iw, ih, fromPreset: mosaicIsPreset };
   assignSplitCells(); // existing value cards take their cell; new ones take theirs as you make them
   // The landscape Protocol card isn't part of the vertical grid, but it ALSO adopts
   // the single image (full, cover-fit) — overriding any previous bg — and uses the
@@ -1524,7 +1527,8 @@ function applyMosaic() {
     s.bgOwn = { type: "custom", name: null, dataUrl: mosaicSrc, transform: defaultTransform() };
     s.bgOwnBack = null;
   });
-  if (!customBgs.includes(mosaicSrc)) { customBgs.unshift(mosaicSrc); customBgs = customBgs.slice(0, 12); saveCustomBgs(); buildBgGrid(); }
+  // Uploaded/custom split sources go into the custom picker; presets are already there.
+  if (!mosaicIsPreset && !customBgs.includes(mosaicSrc)) { customBgs.unshift(mosaicSrc); customBgs = customBgs.slice(0, 12); saveCustomBgs(); buildBgGrid(); }
   saveShared(); saveDeck(); markDirty();
   closeMosaic();
   el("inCustomBg").checked = true;
