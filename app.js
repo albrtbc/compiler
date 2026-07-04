@@ -1363,7 +1363,18 @@ el("btnBgBack").addEventListener("click", () => setBgEditSide("back"));
 // Background grid: uploaded customs first, then the bundled presets.
 let customBgs = [];
 function selectBg(bg) {
-  setEditBg(Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, bg));
+  const next = Object.assign({ type: "none", name: null, dataUrl: null, transform: defaultTransform() }, bg);
+  // In split mode the picker shows the split's SOURCE image. Picking a different image
+  // means "use this one instead", so drop the split — otherwise assignSplitCells would
+  // immediately revert this card to its split cell (you couldn't pick a new one to
+  // re-split). The freshly picked image can then be split from the mosaic dialog.
+  if (deckShared.perCardBg && deckShared.split && deckShared.split.dataUrl) {
+    const source = deckShared.split;
+    const sameSource = next.type === "preset" ? next.name === source.preset
+                     : next.type === "custom" ? next.dataUrl === source.dataUrl : false;
+    if (!sameSource) deckShared.split = null;
+  }
+  setEditBg(next);
   refreshBgSelection();
   syncBgAdjust();
   scheduleRender();
