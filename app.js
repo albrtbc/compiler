@@ -2796,7 +2796,7 @@ function exportDeckJson() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "deck.json";
+  a.download = safeName(deckShared.title || "deck") + ".json";
   document.body.appendChild(a);
   a.click();
   a.remove();
