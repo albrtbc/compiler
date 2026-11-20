@@ -24,6 +24,50 @@ export function fitSingleLine(ctx, text, fontFam, maxW, maxH, maxSize, minSize) 
   return Math.max(size, minSize);
 }
 
+/* Name fitter: narrow before shrinking. For each size from zone.max down to
+   zone.min it tries, in order: natural width, tightened letter spacing (down to
+   zone.fit.tracking em), then horizontal squeeze (down to zone.fit.minScaleX).
+   Names that fit at the largest size whose glyph box fits zone.h come back as
+   {size, 0, 1}, the same size fitSingleLine picks; longer names are tracked/condensed
+   at a larger size than fitSingleLine would choose. Returns { size, trackingPx, scaleX };
+   the caller applies scaleX through fillText's maxWidth. Leaves ctx.letterSpacing as found. */
+export function fitNameLine(ctx, text, zone) {
+  const fit = zone.fit || { tracking: 0, minScaleX: 1 };
+  const availW = zone.w - (zone.padX || 0) * 2;
+  const canTrack = "letterSpacing" in ctx;
+  const prev = canTrack ? ctx.letterSpacing : undefined;
+  const n = Math.max(1, [...(text || "")].length);
+  const measure = (size, px) => {
+    ctx.font = `${size}px ${zone.font}`;
+    if (canTrack) ctx.letterSpacing = px + "px";
+    const m = ctx.measureText(text);
+    const h = (m.actualBoundingBoxAscent || size * 0.8) + (m.actualBoundingBoxDescent || size * 0.2);
+    return { width: m.width, h };
+  };
+  const squeeze = (width) => (width > availW && width > 0 ? Math.max(0, availW / width) : 1);
+  try {
+    for (let size = zone.max; size >= zone.min; size--) {
+      let { width, h } = measure(size, 0);
+      if (h > zone.h) continue;
+      if (width <= availW) return { size, trackingPx: 0, scaleX: 1 };
+      let trackingPx = 0;
+      if (canTrack) {
+        const em = Math.max(fit.tracking, (availW - width) / (n * size));
+        trackingPx = em * size;
+        ({ width } = measure(size, trackingPx));
+        if (width <= availW) return { size, trackingPx, scaleX: 1 };
+      }
+      if (width * fit.minScaleX <= availW) return { size, trackingPx, scaleX: squeeze(width) };
+    }
+    // Nothing qualified: smallest size, floor spacing, squeeze below the floor.
+    const trackingPx = canTrack ? fit.tracking * zone.min : 0;
+    const { width } = measure(zone.min, trackingPx);
+    return { size: zone.min, trackingPx, scaleX: squeeze(width) };
+  } finally {
+    if (canTrack) ctx.letterSpacing = prev;
+  }
+}
+
 export function wrapLines(ctx, text, fontFam, size, maxW) {
   ctx.font = `${size}px ${fontFam}`;
   const lines = [];
@@ -49,7 +93,10 @@ export function drawLine(ctx, text, zone, color) {
   if (!text) return;
   const padX = zone.padX || 0;
   const availW = zone.w - padX * 2;
-  const size = fitSingleLine(ctx, text, zone.font, availW, zone.h, zone.max, zone.min);
+  let size, trackingPx = 0;
+  if (zone.fit) ({ size, trackingPx } = fitNameLine(ctx, text, zone));
+  else size = fitSingleLine(ctx, text, zone.font, availW, zone.h, zone.max, zone.min);
+  const canTrack = !!zone.fit && "letterSpacing" in ctx;
   ctx.font = `${size}px ${zone.font}`;
   ctx.fillStyle = color;
   ctx.textBaseline = "middle";
@@ -60,6 +107,7 @@ export function drawLine(ctx, text, zone, color) {
     ctx.shadowOffsetY = zone.shadow.dy || 0;
   }
   const cy = zone.y + zone.h / 2 + (zone.dy || 0);
+  if (canTrack) ctx.letterSpacing = trackingPx + "px";
   if (zone.align === "left") {
     ctx.textAlign = "left";
     ctx.fillText(text, zone.x + padX, cy, availW);
@@ -67,6 +115,7 @@ export function drawLine(ctx, text, zone, color) {
     ctx.textAlign = "center";
     ctx.fillText(text, zone.x + zone.w / 2 + (zone.dx || 0), cy, availW);
   }
+  if (canTrack) ctx.letterSpacing = "0px";
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
 }
