@@ -33,9 +33,15 @@ export const LINE_FACTOR = 1.18;
 
 export const TEXT_SHADOW = { color: "rgba(0,0,0,0.7)", blur: 17, dx: 0, dy: 8 };
 
+// How a protocol name that doesn't fit at full size is fitted (`fit` on the name zones):
+// first tighten the letter spacing, down to `tracking` em; then narrow the glyphs, down to
+// `minScaleX` of their width; only then shrink the font. Tuned on screenshots (TASK-56):
+// tighter spacing makes Hacked-KerX letters merge (no kerning, glyphs already touch).
+export const NAME_FIT = { tracking: -0.015, minScaleX: 0.72 };
+
 // Zone coordinates measured against the 744×1039 frame.
 export const ZONES = {
-  title: { x: 39, y: 31, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18 },
+  title: { x: 39, y: 31, w: 240, h: 96, font: "HackedKerX", max: 60, min: 18, align: "left", padX: 18, fit: NAME_FIT },
   value: { x: 292, y: 40, w: 159, h: 175, font: "HackedKerX", max: 161, min: 28, dy: 10, dx: 0 },
   hex:   { x: 583, y: 36, w: 124, h: 135, pointy: "v", flatA: 0.26, flatB: 0.85 }, // covers the frame hexagon
   panels: {
@@ -47,14 +53,14 @@ export const ZONES = {
 
 export const COMPILE_FRONT = {
   topBar:   { x: 72, y: 40, w: 700, h: 80, font: "SupermolotR", max: 36, min: 14, align: "left", padX: 26 },
-  name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW },   // center ≈356
+  name:     { x: 60, y: 256, w: 930, h: 200, font: "HackedKerX", max: 150, min: 34, shadow: TEXT_SHADOW, fit: NAME_FIT },   // center ≈356
   subtitle: { x: 60, y: 418, w: 930, h: 90, font: "MotionControl", max: 62, min: 16, shadow: TEXT_SHADOW },  // center ≈463
   bottomBar:{ x: 60, y: 620, w: 930, h: 72, font: "SupermolotR", max: 34, min: 14, align: "center", padX: 22 }, // centred on the card like name/subtitle
   hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
 };
 export const COMPILE_BACK = {
   // name sits in the thick (left) part of the bottom bar, left-aligned at the same height as the back line
-  name:     { x: 78, y: 592, w: 510, h: 128, font: "HackedKerX", max: 104, min: 24, align: "left", padX: 30 }, // center ≈656
+  name:     { x: 78, y: 592, w: 510, h: 128, font: "HackedKerX", max: 104, min: 24, align: "left", padX: 30, fit: NAME_FIT }, // center ≈656
   backLine: { x: 652, y: 626, w: 356, h: 84, font: "SupermolotR", max: 40, min: 14, align: "center", padX: 16 }, // center ≈668
   hex:      { x: 856, y: 38, w: 144, h: 140, pointy: "h", flatA: 0.18, flatB: 0.86 }, // covers the frame hexagon
 };

@@ -26,7 +26,7 @@ import {
   getImageFromDataUrl, getPresetImage, getValueOverlay, rotate90ccw,
 } from "./src/core/images.js";
 import {
-  fitSingleLine, drawLine, drawPanelText, panelFitSize, markersToHtml, htmlToMarkers,
+  fitSingleLine, fitNameLine, drawLine, drawPanelText, panelFitSize, markersToHtml, htmlToMarkers,
 } from "./src/render/text.js";
 import { glitchSeed, applyFrontGlitch } from "./src/render/glitch.js";
 import { drawLogoHex, drawBackground, drawSideCode, toPoker } from "./src/render/draw.js";
@@ -512,6 +512,8 @@ function layoutOneOverlay(cnv, overlay, hotspotId, mode, ids) {
     e.style.textAlign = f.align;
     e.style.textTransform = f.upper ? "uppercase" : "none";
     e.style.paddingLeft = e.style.paddingRight = padX * scale + "px";
+    // The element is reused across names and view modes: clear anything the name fit set.
+    e.style.transform = e.style.transformOrigin = e.style.letterSpacing = "";
     const raw = (e.value || "").trim();
     const hint = raw || e.placeholder || "";
     if (f.multiline) {
@@ -524,7 +526,24 @@ function layoutOneOverlay(cnv, overlay, hotspotId, mode, ids) {
       e.style.paddingBottom = "0px";
     } else {
       const disp = f.upper ? hint.toUpperCase() : hint;
-      const size = fitSingleLine(measureCtx, disp, f.font, z.w - padX * 2, z.h, z.max, z.min);
+      let size;
+      if (z.fit) {
+        // Mirror drawLine: tracked / narrowed name, so the caret follows the drawn letters.
+        const fit = fitNameLine(measureCtx, disp, z);
+        size = fit.size;
+        e.style.letterSpacing = fit.trackingPx * scale + "px";
+        if (fit.scaleX < 1) {
+          const sx = fit.scaleX, wide = z.w * scale / sx;
+          e.style.transform = "scaleX(" + sx + ")";
+          e.style.width = wide + "px";
+          e.style.paddingLeft = e.style.paddingRight = padX * scale / sx + "px";
+          if (f.align === "left") e.style.transformOrigin = "0 50%";
+          else {
+            e.style.transformOrigin = "50% 50%";
+            e.style.left = (z.x + z.w / 2) * scale - wide / 2 + "px";
+          }
+        }
+      } else size = fitSingleLine(measureCtx, disp, f.font, z.w - padX * 2, z.h, z.max, z.min);
       e.style.fontSize = size * scale + "px";
       e.style.lineHeight = z.h * scale + "px"; // vertically centre the single line
       e.style.paddingTop = e.style.paddingBottom = "0px";
@@ -2059,6 +2078,13 @@ function loadSavedDeck(id) {
     setEditing(null); saveDeck(); saveDeckMeta();
     renderDeck(); renderSavedDecks();
     await regenMissingThumbs(); renderDeck();
+    // Write regenerated thumbs back to the saved entry (by id; no dirty flag, no updatedAt change).
+    let healed = false;
+    for (const sc of d.cards) {
+      const dc = sc && sc.id && !sc.thumb ? deck.find((x) => x.id === sc.id) : null;
+      if (dc && dc.thumb) { sc.thumb = dc.thumb; healed = true; }
+    }
+    if (healed) saveSavedDecks();
     await editProtocolCard(); // auto-select the protocol card for editing
   });
 }
@@ -2954,7 +2980,7 @@ el("inImportDeck").addEventListener("change", (e) => {
         const normalized = cards.map((c) => ({
           id: newId(),
           state: Object.assign(defaultState(), c.state || c),
-          thumb: c.thumb || "",
+          thumb: "", // never trust the file's thumbnail (old look); regenMissingThumbs rebuilds it below
         }));
         deck = replace ? normalized : deck.concat(normalized);
         // Adopt the file's shared logo/background (newer exports), else derive from cards.
@@ -2988,6 +3014,23 @@ async function regenMissingThumbs() {
   saveDeck();
 }
 
+// Cached card thumbnails are rendered once and stored. Bump THUMB_REV whenever
+// rendering changes the look of saved thumbnails (fonts, text fitting, frames...),
+// so every stored thumbnail is rebuilt once on the next load.
+const THUMB_REV = 2;
+async function rebuildThumbsIfStale() {
+  let rev = null;
+  try { rev = await idbGetPooled("thumbRev"); } catch (e) {}
+  if (rev === THUMB_REV) return;
+  deck.forEach((c) => { if (c) c.thumb = ""; });
+  let cleared = 0;
+  savedDecks.forEach((d) => { if (d && Array.isArray(d.cards)) d.cards.forEach((c) => { if (c) { c.thumb = ""; cleared++; } }); });
+  if (cleared > 0) saveSavedDecks(); // never overwrite the stored library with an empty fallback
+  try { await regenMissingThumbs(); } catch (e) { console.warn("thumb rebuild failed", e); return; } // retry on the next load
+  renderDeck();
+  try { await idbSetPooled("thumbRev", THUMB_REV); } catch (e) { console.warn("saveThumbRev failed", e); }
+}
+
 /* ---------------- Init ---------------- */
 (async function init() {
   // If the URL carries a shared deck, cover the page with a loading state right away
@@ -3016,8 +3059,10 @@ async function regenMissingThumbs() {
   syncStateToForm();
   refreshToolbar(); // reflect any restored pending-changes state
 
+  let fontsOk = false;
   try {
     await loadFonts();
+    fontsOk = true;
   } catch (e) {
     console.warn("Fonts not loaded:", e);
   }
@@ -3042,6 +3087,7 @@ async function regenMissingThumbs() {
 
   renderHint.textContent = "Tip: hold Shift and drag to move the background · Shift + scroll to zoom · over the logo it moves/zooms the logo.";
   await scheduleRender();
+  if (!sharedUrl && fontsOk) await rebuildThumbsIfStale(); // with fallback fonts the thumbs would be wrong; retry next load
   // The deck always has a current card to edit (creating a blank one if empty),
   // unless the URL carries a shared deck (handled by the gallery below).
   if (!sharedUrl) {
